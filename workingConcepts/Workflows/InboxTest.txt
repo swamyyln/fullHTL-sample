@@ -1,0 +1,134 @@
+package com.arche11.core.servlets;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.jcr.Session;
+import javax.servlet.Servlet;
+import javax.servlet.ServletException;
+
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.apache.sling.api.servlets.HttpConstants;
+import org.apache.sling.api.servlets.SlingAllMethodsServlet;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.adobe.granite.workflow.WorkflowException;
+import com.adobe.granite.workflow.WorkflowSession;
+import com.adobe.granite.workflow.collection.util.ResultSet;
+import com.adobe.granite.workflow.exec.InboxItem;
+import com.adobe.granite.workflow.exec.Route;
+import com.adobe.granite.workflow.exec.WorkItem;
+import com.adobe.granite.workflow.exec.Workflow;
+import com.adobe.granite.workflow.status.WorkflowStatus;
+import com.day.cq.workflow.WorkflowService;
+
+@Component(service=Servlet.class ,
+property = {
+	Constants.SERVICE_DESCRIPTION + "= Completes the inbox Items",
+	"sling.servlet.methods=" + HttpConstants.METHOD_GET,
+	"sling.servlet.paths=" + "/bin/test/SwamyCompleteInboxItemServlet"
+
+})
+public class CompleteInboxItemServlet extends SlingAllMethodsServlet {
+
+	private static final long serialVersionUID = 1L;
+	
+	private static Logger logger=LoggerFactory.getLogger(CompleteInboxItemServlet.class);
+	
+	  @Reference
+	  ResourceResolverFactory rrf;
+	    
+	  @Reference
+	  WorkflowService workflowService;
+	  
+	  ResourceResolver rr;
+
+	@Override
+	protected void doGet(SlingHttpServletRequest request,
+			SlingHttpServletResponse response) throws ServletException,
+			IOException {
+		Session session=null;
+		StringBuilder strBldr=new StringBuilder();
+	     String[] states = {"RUNNING"};
+	     WorkItem finalWorkItem=null;
+
+		try {
+		
+			WorkflowSession workflowfSession=request.getResourceResolver().adaptTo(WorkflowSession.class);
+			
+			ResultSet<InboxItem> items=workflowfSession.getActiveInboxItems(0, -1, null);
+			
+			InboxItem[] activeItems=items.getItems();
+			if(activeItems.length>0){
+				
+				   //get all Inbox workFlow workItems and get the corresponding running workflow Instances
+				for(InboxItem i:activeItems){
+					logger.info("inside 1st for loop");
+					if(i.getItemType().equalsIgnoreCase("WorkItem")){
+						
+					logger.info("inside 1st for loop with contentPath :"+i.getContentPath());
+						
+					  strBldr.append(i.getItemType()+","+i.getItemSubType()+","+i.getStatus()+","+i.getContentPath()+";;");
+					
+					   //get all the running workflows
+					Workflow[] runningWorkflows=workflowfSession.getWorkflows(states);
+					for(Workflow wrkflw:runningWorkflows){
+					logger.info("inside 2nd for loop");
+						
+					logger.info(wrkflw.getWorkflowModel().getTitle());
+						
+						 //put a check to implement auto completion for only specific workflow models with or conditions
+						if(wrkflw.getWorkflowModel().getTitle().equals("swamyCompleteInboxWorkflowItem")){
+							
+						if(wrkflw.getWorkflowData().getPayload().equals(i.getContentPath())){
+							logger.info("Inside payload matched..retreiving workflow instance with Id :"+wrkflw.getId());
+							Workflow finalWorkflow=workflowfSession.getWorkflow(wrkflw.getId());
+							logger.info("After finalWorkflow : "+finalWorkflow);
+						    
+							String finalWorkflowId=finalWorkflow.getId();
+							logger.info("After finalWorkflowId : "+finalWorkflowId);
+							
+							List<WorkItem> workItems=finalWorkflow.getWorkItems();
+							for(WorkItem workitem:workItems){
+								finalWorkItem=workitem;
+								logger.info("Current "+workitem.getId());
+							}
+							logger.info("After finalWorkItem : "+finalWorkItem );
+	
+							List<Route> routes = workflowfSession.getRoutes(finalWorkItem,false);
+							logger.info("After routes : "+routes);
+							
+							workflowfSession.complete(finalWorkItem, routes.get(0));
+							logger.info("After complete");
+						}
+					}
+				}
+				}
+			}
+		}
+			response.getOutputStream().print("This is ur Inbox complete servlet with user session : "+session.getUserID() +" :: and completed workflows content path "+strBldr.toString());
+			
+		} catch (LoginException e) {
+			
+			e.printStackTrace();
+		} catch (WorkflowException e) {
+			
+			e.printStackTrace();
+		}
+		
+		
+	}
+}
+
+/etc/workflow/models/mypdfdamcreationworkflow/jcr:content/model

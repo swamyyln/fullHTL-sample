@@ -1,0 +1,52 @@
+AEM Sling error handler : /apps/sling/servlet/errorhandler/404.html
+---------------------------------------AEM login---------------------------------------------
+
+AEM Author login (Below login.js will be called while logging Implemented AEM lockout and password complexity)
+/apps/granite/core/content/login/clientlib/login.js
+
+---------------------------------------DAM Workflow Start-------------------------------------------------------------
+Dam rail -->Create workflow --->Start workflow dialog customisation [Added AssignTo]
+
+/apps/dam/gui/content/commons/createworkflowdialog
+
+------------------------------Add name column in asset list view--------------------------------------------------------
+
+To render added "Name" column in "/libs/dam/gui/content/commons/availablecolumns/name [sortable Boolean true , configurable Boolean True]" add below code in 
+
+ <td class="foundation-collection-item-title" is="coral-table-cell" value="<%= xssAPI.encodeForHTMLAttr(resource.getName()) %>">
+        <%= xssAPI.encodeForHTML(resource.getName()) %>
+ </td>
+	
+[/apps/dam/gui/coral/components/admin/contentrenderer/row/asset/asset.jsp] 
+
+
+1)Only 40 assets will be sorted in Listview at front end, [for >40 lazyloading will happen]
+
+2)Please refer to "/libs/dam/gui/content/assets/jcr:content/views/list" for settings and limitations
+
+---------------------------------DAM Metadata Schema Editor [add custom fileds like pathbrowser & radio button field]-----------------------------
+
+To add rendering : /apps/dam/gui/coral/components/admin/schemaforms/formbuilder/builditems.jsp
+
+To add widgets for use in buildItems.jsp : /apps/dam/gui/coral/components/admin/schemaforms/formbuilder/formfields/pathfield/pathfield.jsp [copy of textfield.jsp with pathbroswer resourceType]
+                                           /apps/dam/gui/coral/components/admin/schemaforms/formbuilder/formfields/radio/radio.jsp [copy of dropdown.jsp].
+								                                         
+---------------------------------DAM Metadata form validations-------------------------------------------------------------------------------------
+Path :/apps/dam/gui/coral/components/admin/propertiesform/clientlibs/propertieseditor/js/propertieseditor.js
+
+Refer workingworkfing DAM validations.js
+
+---------------------------------------Asset Rest API----------------------------------------------
+
+To get any details inside 
+http://10.38.3.12:4502/api.json
+
+To get asset details using HTTP rest API
+http://10.38.3.12:4502/api/assets/thf/en/docs/auth/whitepapers.json
+
+to get tag details in json format
+http://10.38.3.12:4502/etc/tags/thf/firm.tags.json
+
+to get asset details in json format
+http://10.38.3.12:4502//content/dam/thf/en/docs/pub/funddocuments/brochures.assets.json
+

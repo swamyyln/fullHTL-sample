@@ -1,0 +1,1341 @@
+package com.arche11.core;
+
+import org.osgi.service.metatype.annotations.AttributeDefinition;
+import org.osgi.service.metatype.annotations.AttributeType;
+import org.osgi.service.metatype.annotations.ObjectClassDefinition;
+import org.osgi.service.metatype.annotations.Option;
+
+
+@ObjectClassDefinition(name = "User Account Configuration", description = "Configure the user Details")
+public @interface CustomOCD {
+
+	@AttributeDefinition(name = "user.name", description = "User Name" ,defaultValue="")
+	String getUserName() default "defaultValue";
+	
+	
+	@AttributeDefinition(name = "memberof.name", description = "Member of the group", options = {
+			@Option(label = "Approval", value = "approve"),
+			@Option(label = "Editor", value = "editor"),
+			@Option(label = "Workflow Editor", value = "workflow.editor"),
+			@Option(label = "Administrator", value = "admin")})
+	String getMemberOf() default "DefaultSwamy";
+
+	@AttributeDefinition(name = "userpassword", description = "Password of the user account", type = AttributeType.PASSWORD)
+	String getPassword() default "Default";
+	
+	@AttributeDefinition(name = "user.isAdminUser", description = "is it admin user or not?")
+	boolean isAdminUser() default false;
+
+	@AttributeDefinition(name = "user.environments", description = "Define the all environment where this user will be available")
+	String[] getEnvironments() default {"thf","smart529"};	
+
+	@AttributeDefinition(name = "user.validity", description ="Validity of user account", defaultValue = "10", required = true, type = AttributeType.INTEGER, min = "10")
+	int getValidity() default 10;
+
+	/*@AttributeDefinition(name = "memberof.name", description = "Member of the group", options = {
+			@Option(label = "Approval", value = "approve"),
+			@Option(label = "Editor", value = "editor"),
+			@Option(label = "Workflow Editor", value = "workflow.editor"),
+			@Option(label = "Administrator", value = "admin")})
+	String getMemberOf() default "";*/
+}
+
+------------------------------------------------------------------------------------------------------------------
+
+package com.arche11.core;
+
+public interface CustomerServiceInterface {
+
+	public String getFelixConfig();
+	
+	public boolean isAuthor();
+	
+	public String memberOf();
+	
+	public String myPassword();
+}
+
+--------------------------------------------------------------------------------------------------
+
+package com.arche11.core;
+
+import org.apache.sling.settings.SlingSettingsService;
+import org.osgi.service.component.annotations.Activate;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.metatype.annotations.Designate;
+
+import com.adobe.granite.crypto.CryptoException;
+import com.adobe.granite.crypto.CryptoSupport;
+
+@Component(service=CustomerServiceInterface.class ,immediate=true)
+@Designate(ocd=CustomOCD.class)
+public class CustomerServiceInterfaceImpl implements CustomerServiceInterface {
+
+	
+	private CustomOCD customOcd;
+	
+	
+	private boolean author;
+    
+    @Reference
+    private SlingSettingsService settings;
+    
+    @Activate
+    public void activate(final CustomOCD config){
+    	this.customOcd=config;
+    	author=settings.getRunModes().contains("author");
+    }
+	@Override
+	public String getFelixConfig() {
+		return customOcd.getUserName();
+	}
+	@Override
+	public boolean isAuthor() {
+		return author;
+	}
+	@Override
+	public String memberOf() {
+		
+		return customOcd.getMemberOf();
+	}
+	@Override
+	public String myPassword() {
+		return customOcd.getPassword();
+	}
+
+}
+----------------------------------------------------------------------------
+
+package com.arche11.core;
+
+import java.io.IOException;
+
+import javax.servlet.Servlet;
+import javax.servlet.ServletException;
+
+import org.apache.commons.lang3.StringUtils;
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.servlets.HttpConstants;
+import org.apache.sling.api.servlets.SlingAllMethodsServlet;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.adobe.granite.crypto.CryptoException;
+import com.adobe.granite.crypto.CryptoSupport;
+
+@Component(service=Servlet.class,
+property={
+	"sling.servlet.paths="+"/bin/swamy/getFelixConfig",
+	"sling.servlet.methods="+HttpConstants.METHOD_GET,
+	Constants.SERVICE_DESCRIPTION+"=This is my Felix config invoke"
+})
+public class myCustomOCDInvokeServlet extends SlingAllMethodsServlet {
+
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
+	
+	private static final Logger log=LoggerFactory.getLogger(myCustomOCDInvokeServlet.class);
+
+	@Reference
+	CustomerServiceInterface myCustomServiceInterface;
+	
+	@Reference
+    private CryptoSupport cryptoServiceObj;
+	
+	@Override
+	protected void doGet(SlingHttpServletRequest request,
+			SlingHttpServletResponse response) throws ServletException,
+			IOException {
+	
+		String userName=myCustomServiceInterface.getFelixConfig();
+		
+		log.info("Username :"+userName);
+		log.info("Password :"+myCustomServiceInterface.myPassword());
+		
+		response.getWriter().write("Current configured Felix User Name :"+userName +
+				"\n Current Felix isAuthor : "+myCustomServiceInterface.isAuthor()+"\n"
+				+"Current user is Member of : "+myCustomServiceInterface.memberOf()+"\n"
+				+"Current user password is Member of : "+decodeString(myCustomServiceInterface.myPassword()));
+	}
+	
+	public String decodeString(String passwordConfig){
+		StringBuilder encryptedString=new StringBuilder();
+		 String decodedString = passwordConfig;
+		 log.info("recieved password :"+decodedString);
+		if (StringUtils.isNotEmpty(passwordConfig)) {
+            encryptedString.append('{').append(passwordConfig).append('}');
+            log.info("encrypted String "+encryptedString);
+            log.info("crypto obj :"+cryptoServiceObj.toString());
+            if (cryptoServiceObj.isProtected(encryptedString.toString())) {
+                try {
+					decodedString = cryptoServiceObj.unprotect(encryptedString.toString());
+					log.info("decodedPassword :"+ decodedString);
+				} catch (CryptoException e) {
+					e.printStackTrace();
+				}
+            } else {
+            	log.info("not protected");
+            }
+	}
+		else {
+			log.info("Password config empty");
+         }
+		return decodedString;
+}
+}
+----------------------------------------------------------------------------------------------
+localhost:4502/system/console/crypto --to PROTECT/UNPROTECT passwords
+
+------------------------------------------------------------------------------------------
+package com.thehartford.thf.workflows;
+
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.Map;
+
+import javax.jcr.Node;
+import javax.jcr.NodeIterator;
+import javax.jcr.PathNotFoundException;
+import javax.jcr.RepositoryException;
+import javax.jcr.ValueFormatException;
+import javax.jcr.query.Query;
+import javax.jcr.query.QueryResult;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Properties;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.ReferencePolicy;
+import org.apache.felix.scr.annotations.Service;
+import org.apache.sling.commons.mime.MimeTypeService;
+import org.apache.sling.jcr.resource.JcrResourceResolverFactory;
+import org.osgi.framework.Constants;
+
+import com.day.cq.dam.api.Asset;
+import com.day.cq.dam.api.handler.store.AssetStore;
+import com.day.cq.dam.commons.process.AbstractAssetWorkflowProcess;
+import com.day.cq.workflow.WorkflowException;
+import com.day.cq.workflow.WorkflowSession;
+import com.day.cq.workflow.exec.WorkItem;
+import com.day.cq.workflow.exec.WorkflowProcess;
+import com.day.cq.workflow.metadata.MetaDataMap;
+import com.thehartford.thf.core.configmanagement.ConfigService;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.util.UUIDUtil;
+import com.thehartford.thf.utils.JcrUtil;
+
+/**
+ * CreateAssetMetaData Class is used for create asset metadata .
+ *
+ */
+
+@Component (metatype=true, immediate=true, inherit=true)
+@Service
+@Properties({
+        @Property(
+                name = Constants.SERVICE_DESCRIPTION,
+                value = "This Workflow Process step creates custom metadata for DAM Asset created"),
+        @Property(name = Constants.SERVICE_VENDOR, value = "SapientNitro"),
+        @Property(name = "process.label",
+                value = "THF Create Custom MetaData Process") })
+public class CreateAssetMetaData extends AbstractAssetWorkflowProcess {
+	@Reference
+	private ConfigService configService;
+
+	@Reference  
+	private JcrResourceResolverFactory jcrResolverFactory;
+	
+	@Reference
+    protected MimeTypeService mimeTypeService;
+
+    @Reference
+    private AssetStore store;
+
+    /**
+     * Path to search for Assets.
+     */
+    private static final String ASSET_METADATA_NODENAME = "metadata";
+
+    /** The Constant DAM_ASSET_UNIQUEID. */
+    private static final String DAM_ASSET_UNIQUEID = "dc:uuid";
+
+    /** The Constant REVISION_DATE. */
+    private static final String REVISION_DATE = "prism:revisionDate";
+    
+    private static final String JCR_TITLE = "jcr:title";
+    
+    /** The Constant REVISION_DATE. */
+	private static final String EXPIRATION_PROPERTY = "prism:expirationDate";
+	
+	/** The Constant PROPERTY_UPDATE_REVISION_DATE. */
+    public static final String PROPERTY_UPDATE_REVISION_DATE_CLASSIC = "dc:updateDate";
+    
+    /** The Constant PROPERTY_UPDATE_REVISION_DATE. */
+    public static final String PROPERTY_UPDATE_REVISION_DATE_TOUCHUI = "updatedRevisionDate";
+
+    
+    @Override
+    public final void execute(final WorkItem item,
+            final WorkflowSession session, final MetaDataMap args)
+            throws WorkflowException {
+    	LoggerUtil.debugLog(CreateAssetMetaData.class, "Inside execute() of CreateAssetMetaData.java.");
+        final String payLoadPath = item.getWorkflowData().getPayload().toString();
+        LoggerUtil.debugLog(CreateAssetMetaData.class, "*************** docPath is : {} ", payLoadPath);
+        
+        if(null!=payLoadPath && payLoadPath.contains("/content/dam/thf/en/docs/auth/Pre-Registration Bulk Email File/userslist.csv")){
+        	LoggerUtil.debugLog(CreateAssetMetaData.class,"Ignoring CreateAssetMetaData process");
+        }else{
+        	
+        	
+        	Node payLoadNode = null; // For this step this will always be a
+            // rendition node
+			String documentUUID = null;
+			Node assetMetaDataNode = null;
+			String dcUUID = null;
+			Asset createdAsset = null;
+			Map<String, Object> createdAssetMetaDataMap = null;
+			Node createdAssetNode = null;
+			String updated_revisionDate=null;
+			Calendar revisionDate = Calendar.getInstance();
+			  Calendar expirationDate = null;
+			//   Calendar obsoleteDate = Calendar.getInstance();
+			
+			// Resource payLoadResource = null;
+			try {
+			documentUUID = UUIDUtil.getRandomUUID();
+			// payLoadResource = (Resource) item.getWorkflowData().getPayload();
+			payLoadNode = (Node) session.getSession().getItem(payLoadPath);
+			if (payLoadNode != null && !payLoadPath.contains("/fullholdings/")) {
+			assetMetaDataNode = ((Node) payLoadNode.getAncestor(payLoadNode
+			   .getDepth() - 2))
+			   .getNode(CreateAssetMetaData.ASSET_METADATA_NODENAME);
+			
+			createdAssetNode = (Node) payLoadNode.getAncestor(payLoadNode
+			   .getDepth() - 2);
+			createdAsset = this.getAssetFromPayload(item, payLoadNode.getSession()); 
+			String uuid = JcrUtil.extractProperty(assetMetaDataNode, "dc:uuid");
+			String dctitle=JcrUtil.extractProperty(assetMetaDataNode, "dc:title");
+			String jcrtitle=JcrUtil.extractProperty(assetMetaDataNode, "jcr:title");
+			// DamUtil.resolveToAsset(payLoadResource);
+			if (null != createdAsset && null != createdAssetNode) {
+				 
+				createdAsset.setBatchMode(true);
+			createdAssetMetaDataMap = createdAsset.getMetadata();
+			
+			revisionDate = JcrUtil.getPropertyCalendar(assetMetaDataNode,CreateAssetMetaData.REVISION_DATE);
+			updated_revisionDate=revisionDate.toString();
+		    expirationDate = JcrUtil.getPropertyExpirydate(assetMetaDataNode,CreateAssetMetaData.EXPIRATION_PROPERTY);
+			//    obsoleteDate =  JcrUtil.getPropertyCalendar(assetMetaDataNode,CreateAssetMetaData.OBSOLETE_DATE);
+			LoggerUtil.debugLog(this.getClass(),"before update" + JcrUtil.getPropertyCalendar(assetMetaDataNode,"prism:revisionDate")); 
+			
+				 
+			final Iterator<Map.Entry<String, Object>> metaDataIterator = createdAssetMetaDataMap
+			       .entrySet().iterator();
+			while (metaDataIterator.hasNext()) {
+				  
+			   final Map.Entry<String, Object> mapEntry = metaDataIterator
+			           .next();
+			   LoggerUtil.debugLog(this.getClass(),"property  --> "+mapEntry.getKey() +"Value --->"+mapEntry.getValue());
+			   JcrUtil.setProperty(assetMetaDataNode,
+			           mapEntry.getKey(), mapEntry.getValue(), true,session.getSession());
+			   if(mapEntry.getKey().equalsIgnoreCase("dc:title")){
+				   if((mapEntry.getValue()==null)|| (mapEntry.getValue().equals(StringUtils.EMPTY))){
+					   dctitle=mapEntry.getValue().toString();
+				   }
+				   
+			   }
+			   
+			}
+			if((jcrtitle==null)||(jcrtitle.equals(StringUtils.EMPTY)||(jcrtitle.equalsIgnoreCase("Untitled"))) ){
+			  JcrUtil.setProperty(assetMetaDataNode, CreateAssetMetaData.JCR_TITLE, dctitle, true,session.getSession()); 
+			}
+			JcrUtil.setProperty(assetMetaDataNode, CreateAssetMetaData.REVISION_DATE, revisionDate, true,session.getSession()); 
+			if(null!=expirationDate){
+				LoggerUtil.debugLog(this.getClass(),"expirationDate setting as" + expirationDate.toString());
+			 JcrUtil.setProperty(assetMetaDataNode, CreateAssetMetaData.EXPIRATION_PROPERTY, expirationDate, true,session.getSession()); 
+			}
+			//    JcrUtil.setProperty(assetMetaDataNode, CreateAssetMetaData.OBSOLETE_DATE, obsoleteDate, true); 
+					
+			LoggerUtil.debugLog(this.getClass(),"after update" + JcrUtil.getPropertyCalendar(assetMetaDataNode,"prism:revisionDate")); 
+			Long UUIDCount = (long) 0;
+			if (assetMetaDataNode
+			       .hasProperty(CreateAssetMetaData.DAM_ASSET_UNIQUEID)) {
+			   dcUUID = assetMetaDataNode.getProperty("dc:uuid")
+			           .getString();
+			   final String stmt = "SELECT * FROM [nt:base] AS s WHERE ISDESCENDANTNODE([/content/dam/thf]) and CONTAINS(s.[dc:uuid], '"
+			           + dcUUID + "')";
+			   LoggerUtil.debugLog(this.getClass(),"stmt query  :::: "+stmt); 
+			   final Query query = session.getSession().getWorkspace()
+			           .getQueryManager()
+			           .createQuery(stmt, Query.JCR_SQL2);
+			   NodeIterator it = null;
+			   final QueryResult results = query.execute();
+			   LoggerUtil.debugLog(this.getClass(),"results!=null  :::: "+(results != null)); 
+			   if (results != null) {
+			       it = results.getNodes();
+			       UUIDCount = it.getSize();
+			
+			   }
+			
+			}
+			LoggerUtil.debugLog(this.getClass(),"UUIDCount :::: "+UUIDCount); 
+			if (UUIDCount > 1 || UUIDCount < 1) {
+			   final boolean setStatus = JcrUtil.setProperty(
+			           assetMetaDataNode,
+			           CreateAssetMetaData.DAM_ASSET_UNIQUEID,
+			           documentUUID.toString(), true,session.getSession());
+			   LoggerUtil
+			           .debugLog(
+			                   this.getClass(),
+			                   "The Property is set to : {}  with status : {} with uuid count > 1 or uuid count <1 ",
+			                   JcrUtil.getPropertyString(
+			                           assetMetaDataNode,
+			                           CreateAssetMetaData.DAM_ASSET_UNIQUEID),
+			                   setStatus);
+			} else if (assetMetaDataNode
+			       .hasProperty(CreateAssetMetaData.DAM_ASSET_UNIQUEID)
+			       && JcrUtil.getPropertyString(assetMetaDataNode,
+			               CreateAssetMetaData.DAM_ASSET_UNIQUEID)
+			               .isEmpty()) {
+			   final boolean setStatus = JcrUtil.setProperty(
+			           assetMetaDataNode,
+			           CreateAssetMetaData.DAM_ASSET_UNIQUEID,
+			           documentUUID.toString(), true,session.getSession());
+			   LoggerUtil
+			           .debugLog(
+			                   this.getClass(),
+			                   "The Property is set to : {}  with status : {} ",
+			                   JcrUtil.getPropertyString(
+			                           assetMetaDataNode,
+			                           CreateAssetMetaData.DAM_ASSET_UNIQUEID),
+			                   setStatus);
+			}
+			}
+			
+			setRevisionDate(assetMetaDataNode,session,updated_revisionDate);
+			}
+			} catch (final RepositoryException repositoryException) {
+			LoggerUtil
+			.errorLog(
+			       this.getClass(),
+			       "RepositoryException occurrred inside execute method of :  {} :: ",
+			       this.getClass(), repositoryException.getMessage());
+			repositoryException.printStackTrace();
+			}
+        }
+         
+    }
+    
+    
+    /**
+     * method auto sets the revision date
+     * when content is added or edited in Configured DAM paths
+     * @param assetMetaDataNode is the Asset metadata  node 
+     * @param session Workflow session
+     */
+    
+    private void setRevisionDate(Node assetMetaDataNode,final WorkflowSession session, String updated_revisionDate )
+       {
+    	LoggerUtil.debugLog(this.getClass(),"setRevisionDate method: metadata node  :"+assetMetaDataNode);
+    	DateFormat sdfMMDDYYYY = new SimpleDateFormat("MM/dd/yyyy");
+    	Date revisonDate = null;
+    	 Calendar dateCalanderValue = Calendar.getInstance();
+    	
+    	String revisionDatePath=null;
+    	String[] documentPath=configService.getDamPathRevisionDate();
+    	revisionDatePath=configService.getPathRevisionNode();
+    	String strMetaData=StringUtils.EMPTY;
+    	String strRevisiondate=StringUtils.EMPTY;
+    	final String updateDate_Classic = JcrUtil.getProperty(assetMetaDataNode,CreateAssetMetaData.PROPERTY_UPDATE_REVISION_DATE_CLASSIC, StringUtils.EMPTY);
+    	
+    	final String updateDate_TouchUI = JcrUtil.getProperty(assetMetaDataNode,CreateAssetMetaData.PROPERTY_UPDATE_REVISION_DATE_TOUCHUI, StringUtils.EMPTY);
+    	
+    	if(StringUtils.isNotBlank(revisionDatePath)){
+			try {
+				
+				Node  revisionSavedPath = (Node) session.getSession().getItem(revisionDatePath);
+				if(null!=revisionSavedPath){
+				strRevisiondate=getRevisionDate(revisionSavedPath);
+				}
+				strMetaData = assetMetaDataNode.getPath();
+				if(null!=documentPath && documentPath.length > 0 && StringUtils.isNotBlank(strRevisiondate)){
+					revisonDate = sdfMMDDYYYY.parse(strRevisiondate);
+					dateCalanderValue.setTime(revisonDate);
+					// dateCalanderValue.getInstance();
+
+					for(int path=0;path < documentPath.length;path++){
+
+						if(strMetaData.contains(documentPath[path])){
+
+							if ((!StringUtils.isEmpty(updateDate_Classic) && updateDate_Classic.equalsIgnoreCase("on"))||(!StringUtils.isEmpty(updateDate_TouchUI) && updateDate_TouchUI.equalsIgnoreCase("Yes"))) {
+								LoggerUtil.debugLog(this.getClass(),"revisiondate method MetaData:"+updated_revisionDate+" modified date got updated ");
+
+							} else {
+
+								JcrUtil.setProperty(assetMetaDataNode,
+										"prism:revisionDate", dateCalanderValue, true, session.getSession());
+								LoggerUtil.debugLog(this.getClass(),"revisiondate set as for :"+assetMetaDataNode +" value: "+dateCalanderValue.getTime());
+								break;
+
+
+							}//for revision date 
+
+
+
+						}else {
+
+							LoggerUtil.debugLog(this.getClass(),"revisiondate method MetaData:"+strMetaData+" not configured for auto update of revision date ");
+						}
+
+					}
+
+
+				}
+				else {
+					
+					LoggerUtil.debugLog(this.getClass(),"revisiondate method damPath length: "+documentPath.length+" and strrevisiondate is: "+strRevisiondate);
+				}
+				
+			}catch (PathNotFoundException e1) {
+				LoggerUtil.errorLog(this.getClass(),"setRevisionDate method: metadata given PathNotFoundException: " +e1.getMessage());
+			} 
+			catch (ValueFormatException e1) {
+				LoggerUtil.errorLog(this.getClass(),"setRevisionDate method: metadata given ValueFormatException: " +e1.getMessage());
+			}
+	    	
+			catch (RepositoryException e1) {
+				LoggerUtil.errorLog(this.getClass(),"setRevisionDate method: metadata given RepositoryException: " +e1.getMessage());
+			}
+	    	
+	    	catch (ParseException e) {
+				LoggerUtil.errorLog(this.getClass(), "Exception occurrred inside setRevisionDate method of while parsing date String :  {} :: ", this.getClass(), e.getMessage());
+			    e.printStackTrace();
+			}
+    	}
+	
+    	
+    }
+    
+    /**
+     * getRevisionDate method reads revisiondate property
+     * from the node passed. 
+     * @param revisiondatePath is the node where revisiondate 
+     * property is set 
+     * 
+     */
+    
+   public String getRevisionDate(Node revisiondatePath) throws PathNotFoundException, ValueFormatException, RepositoryException{
+	   LoggerUtil.debugLog(this.getClass(),"getRevisionDate method takes  node :"+revisiondatePath.getPath());
+	   String revisiondate=StringUtils.EMPTY;
+	   String revisiondateProperty="revisiondate";
+	   if(StringUtils.isNotBlank(revisiondatePath.getPath()))
+       {
+            if(revisiondatePath.hasProperty("revisiondate"))
+            {
+                revisiondate=JcrUtil.getPropertyString(revisiondatePath, revisiondateProperty);
+                LoggerUtil.debugLog(this.getClass(),"getRevisionDate method : revisiondateSaved in the node :"+revisiondate);
+            }
+                         
+  
+      }
+    	
+	   LoggerUtil.debugLog(this.getClass(),"getRevisionDate method returns :"+revisiondate);
+    	return revisiondate;
+    }
+    
+    /*
+     * private int getUUIDCount(){
+     * int uuidCount = 0;
+     * return uuidCount;
+     * }
+     */
+    /**
+     * Fetches the search results for the supplied input criteria.
+     *
+     * @param keyword
+     *            The search keyword.
+     * @param userFilters
+     *            The user supplied filtering tags as
+     *            selected by users through facets.
+     * @param fundId
+     *            The selected fund id, as selected by user
+     *            from the left navigation pane.
+     * @param itemsPerPage
+     *            The items per page to be fetched.
+     * @param startIndex
+     *            The start index from where the results
+     *            are to be started fetching.
+     * @param sortOrder
+     *            The sort order for the results.
+     * @param parentTags
+     *            The map of parent tags for filtering.
+     * @param searchPaths
+     *            The paths where the search is to be performed.
+     * @param isFacetsReqd
+     *            the is facets reqd
+     * @return The parsed results from the search result fetched from the
+     *         search service for the input criteria. {@code false} otherwise.
+     *         {@code true} if
+     *         facets are required;
+     */
+    /*
+     * protected SearchResultDTO getSearchResult(final String keyword,
+     * List<String> userFilters,
+     * final String fundId, final long itemsPerPage, final long startIndex,
+     * final List<SortOrder> sortOrder, final List<SearchParentTagDto>
+     * parentTags,
+     * final List<String> searchPaths, final boolean isFacetsReqd,
+     * final List<SearchPropertyDto> searchProperties) {
+     * String stmt =
+     * "SELECT * FROM [nt:base] AS s WHERE ISDESCENDANTNODE([/content/dam/thf]) and CONTAINS(s.[dc:uuid], 'E92C6596-86F4-4D90-B466-BB066387FB42')"
+     * ;
+     * Query query =
+     * session.getSession().getWorkspace().getQueryManager().createQuery(stmt,
+     * Query.SQL);
+     * QueryResult results = query.execute();
+     * if (results.getNodes() != null && results.getNodes().hasNext()) {
+     * NodeIterator it = results.getNodes();
+     * it.getSize();
+     * }
+     * }
+     */
+
+}
+---------------------------------------------------------------------------------------------
+package com.thehartford.thf.core.util;
+
+import java.util.UUID;
+
+/**
+ * This utility generates UUIDs.
+ */
+public final class UUIDUtil {
+
+    /**
+     * This method returns a Random UUID.
+     * 
+     * @return UUID.
+     */
+    public static String getRandomUUID() {
+        return UUID.randomUUID().toString().toUpperCase();
+    }
+}
+----------------------------------------------------------------------------------------------
+package com.thehartford.thf.utils;
+
+import java.text.ParseException;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.LinkedList;
+import java.util.List;
+
+import javax.jcr.Node;
+import javax.jcr.PathNotFoundException;
+import javax.jcr.Property;
+import javax.jcr.PropertyType;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.jcr.Value;
+import javax.jcr.ValueFormatException;
+
+import org.apache.commons.lang.BooleanUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.time.DateUtils;
+import org.apache.sling.api.resource.ValueMap;
+import org.apache.sling.jcr.resource.JcrPropertyMap;
+import org.apache.sling.jcr.resource.JcrResourceUtil;
+
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.ui.services.impl.AdminSessionServiceImpl;
+
+import javax.jcr.ValueFactory;
+import javax.jcr.lock.LockException;
+import javax.jcr.nodetype.ConstraintViolationException;
+import javax.jcr.version.VersionException;
+import javax.jcr.version.VersionManager;
+
+import java.io.InputStream;
+import com.day.cq.commons.jcr.JcrConstants;
+/**
+ * The Class JcrUtil is used for general methods such as getting session,
+ * retrieving absolute nodes, getting node properties, with proper format.
+ */
+public final class JcrUtil extends com.day.cq.commons.jcr.JcrUtil {
+
+    /** The Constant TRUE. */
+    private static final String TRUE = "true";
+
+    /**
+     * Instantiates a new jcr util.
+     */
+    private JcrUtil() {
+        super();
+    }
+
+    /**
+     * Check if property is set and true (return false otherwise).
+     *
+     * @param properties
+     *            Property map
+     * @param name
+     *            Property name
+     * @return True, if property is set and true, false otherwise
+     */
+    public static boolean isTrue(final ValueMap properties, final String name) {
+
+        final String value = properties.get(name, StringUtils.EMPTY);
+        return JcrUtil.TRUE.equals(value);
+    }
+
+    /**
+     * Safely get session from node.
+     *
+     * @param node
+     *            Node
+     * @return Session
+     */
+    public static Session getSession(final Node node) {
+
+        try {
+            if (node != null) {
+                return node.getSession();
+            }
+
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Repository Exception", e);
+        }
+        return null;
+    }
+
+    /**
+     * Gets the property string.
+     *
+     * @param node
+     *            the node
+     * @param name
+     *            the name
+     * @param defaultValue
+     *            the default value
+     * @return the property string
+     */
+    public static String getPropertyString(final Node node, final String name,
+            final String defaultValue) {
+
+        return JcrUtil.getProperty(node, name, defaultValue);
+    }
+
+    /**
+     * Gets the property.
+     *
+     * @param <T>
+     *            the generic type
+     * @param node
+     *            the node
+     * @param name
+     *            the name
+     * @param defaultValue
+     *            the default value
+     * @return the property
+     */
+    public static <T> T getProperty(final Node node, final String name,
+            final T defaultValue) {
+
+        return new JcrPropertyMap(node).get(name, defaultValue);
+    }
+
+    /**
+     * Gets the property boolean.
+     *
+     * @param node
+     *            the node
+     * @param name
+     *            the name
+     * @param defaultValue
+     *            the default value
+     * @return the property boolean
+     */
+    public static boolean getPropertyBoolean(final Node node,
+            final String name, final boolean defaultValue) {
+
+        try {
+            final Property property = JcrUtil.getProperty(node, name);
+            if (property != null) {
+                return JcrUtil.toBoolean(property.getString());
+            }
+        } catch (final RepositoryException e) {
+
+            LoggerUtil.errorLog(JcrUtil.class, "Repository Exception", e);
+        }
+
+        return defaultValue;
+    }
+
+    /**
+     * Gets the property.
+     *
+     * @param node
+     *            the node
+     * @param name
+     *            the name
+     * @return the property
+     */
+    public static Property getProperty(final Node node, final String name) {
+
+        try {
+            if (node.hasProperty(name)) {
+                return node.getProperty(name);
+            }
+        } catch (final RepositoryException e) {
+
+            LoggerUtil.debugLog(JcrUtil.class, "Could not get property '"
+                    + name + "': ", e);
+        }
+        return null;
+    }
+
+    /**
+     * To boolean.
+     *
+     * @param input
+     *            the input
+     * @return true, if successful
+     */
+    public static boolean toBoolean(final Object input) {
+
+        if (input instanceof String) {
+            if (input.equals("1") || input.equals("0")) {
+                return BooleanUtils.toBoolean(Integer.parseInt((String) input));
+            } else {
+                return BooleanUtils.toBoolean((String) input);
+            }
+        } else if (input instanceof Integer) {
+            return BooleanUtils.toBoolean((Integer) input);
+        } else if (input instanceof Boolean) {
+            return BooleanUtils.toBoolean((Boolean) input);
+        }
+        return false;
+    }
+
+    /**
+     * Gets the property calendar.
+     *
+     * @param node
+     *            the node
+     * @param name
+     *            the name
+     * @return the property calendar
+     */
+    public static Calendar getPropertyCalendar(final Node node,
+            final String name) {
+
+        return JcrUtil.getPropertyCalendar(node, name, Calendar.getInstance());
+    }
+
+    /**
+     * Gets the property calendar.
+     *
+     * @param node
+     *            the node
+     * @param name
+     *            the name
+     * @param defaultValue
+     *            the default value
+     * @return the property calendar
+     */
+    public static Calendar getPropertyCalendar(final Node node,
+            final String name, final Calendar defaultValue) {
+
+        try {
+            final Property property = JcrUtil.getProperty(node, name);
+            if (property != null) {
+                if (property.getType() == PropertyType.DATE) {
+                    return property.getDate();
+                } else if (property.getType() == PropertyType.STRING) {
+                    final String dateStr = property.getString();
+                    final Date date = DateUtils.parseDate(dateStr,
+                            new String[] { Constants.FORMAT_DATE_SHORT });
+                    final Calendar cal = Calendar.getInstance();
+                    cal.setTime(date);
+                    return cal;
+                }
+                return property.getDate();
+            }
+        } catch (final ParseException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "ParseExceptionn", e);
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Repository Exception", e);
+        }
+        return defaultValue;
+    }
+
+    /**
+     * Gets the absolute node.
+     *
+     * @param session
+     *            the session
+     * @param absolutePath
+     *            the absolute path
+     * @return the absolute node
+     */
+    public static Node getAbsoluteNode(final Session session,
+            final String absolutePath) {
+
+        try {
+            if (!StringUtils.isEmpty(absolutePath)
+                    && !absolutePath.contains("=")
+                    && session.nodeExists(absolutePath)) {
+                return session.getNode(absolutePath);
+            }
+        } catch (final NullPointerException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "NullPointer Exception", e);
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Repository Exception", e);
+        }
+        return null;
+    }
+
+    /**
+     * Gets the absolute node.
+     *
+     * @param node
+     *            the node
+     * @param absolutePath
+     *            the absolute path
+     * @return the absolute node
+     */
+    public static Node getAbsoluteNode(final Node node,
+            final String absolutePath) {
+
+        return JcrUtil.getAbsoluteNode(JcrUtil.getSession(node), absolutePath);
+    }
+
+    /**
+     * Gets the property string array.
+     *
+     * @param property
+     *            the property
+     * @return the property string array
+     */
+    public static String[] getPropertyStringArray(final Property property) {
+
+        final List<String> stringList = new LinkedList<String>();
+        try {
+            if (property != null && property.getType() == PropertyType.STRING) {
+                if (property.isMultiple()) {
+                    final Value[] values = property.getValues();
+                    for (final Value value : values) {
+                        stringList.add(value.getString());
+                    }
+                } else {
+                    stringList.add(property.getString());
+                }
+            }
+        } catch (final NullPointerException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "NullPointer Exception", e);
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Repository Exception", e);
+        }
+        return stringList.toArray(new String[stringList.size()]);
+    }
+
+    /**
+     * Gets the property string array.
+     *
+     * @param node
+     *            the node
+     * @param name
+     *            the name
+     * @return the property string array
+     */
+    public static String[] getPropertyStringArray(final Node node,
+            final String name) {
+
+        return JcrUtil.getPropertyStringArray(JcrUtil.getProperty(node, name));
+    }
+
+    /**
+     * Gets the property string.
+     *
+     * @param node
+     *            the node
+     * @param name
+     *            the name
+     * @return the property string
+     */
+    public static String getPropertyString(final Node node, final String name) {
+
+        return JcrUtil.getPropertyString(node, name, StringUtils.EMPTY);
+    }
+
+    /**
+     * Safely set property on JCR node.
+     *
+     * @param node
+     *            Node
+     * @param name
+     *            Property name
+     * @param value
+     *            Value
+     * @param autoSave
+     *            Auto save?
+     * @return True, if successful
+     */
+    public static boolean setProperty(final Node node, final String name,
+            final Object value, final boolean autoSave) {
+        try {
+            JcrResourceUtil.setProperty(node, name, value);
+            if (autoSave) {
+                JcrUtil.save(node.getSession());
+            }
+            return true;
+        } catch (final NullPointerException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Could not set property: {}", e);
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Could not set property: {}", e);
+        }
+        return false;
+    }
+    
+    
+    /**
+     * Safely set property on JCR node.
+     *
+     * @param node
+     *            Node
+     * @param name
+     *            Property name
+     * @param value
+     *            Value
+     * @param autoSave
+     *            Auto save?
+     * @return True, if successful
+     */
+     public static synchronized boolean setProperty(final Node node, final String name,
+            final Object value, final boolean autoSave,javax.jcr.Session session) {
+        try {
+        	
+             if(!node.isCheckedOut()){
+            	 LoggerUtil.debugLog(JcrUtil.class,"Inside synchronized setProperty method, Operating node is not checked out; "
+            	 		+ "checking out current node  -->"+node.getPath());
+            	 VersionManager vm = session.getWorkspace().getVersionManager();
+            	 vm.checkout(node.getParent().getParent().getPath());
+             }
+            JcrResourceUtil.setProperty(node, name, value);
+            if (autoSave) {
+                JcrUtil.save(session,node);
+            }
+            return true;
+        } catch (final NullPointerException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Could not set property: {}", e);
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Could not set property: {}", e);
+        }
+        return false;
+    }
+    
+    
+    /**
+     * Sets the date property value in the input node.
+     * @param node The node for which property is to be set.
+     * @param name The name of the property to be set.
+     * @param date The date value to be set in the property.
+     * @return {@code true} if the property has been set; {@code false}
+     * if setting the property failed.
+     */
+	public static boolean setDateProperty(final Node node, final String name,
+			final Date date) {
+		return JcrUtil.setDateProperty(node, name, date, true);
+	}
+	
+	/**
+	 * Sets the date property value in the input node.
+     * @param node The node for which property is to be set.
+     * @param name The name of the property to be set.
+     * @param date The date value to be set in the property.
+	 * @param autoSave {@code true} if property is to be saved after being set.
+	 * @return {@code true} if the property has been set; {@code false}
+     * if setting the property failed.
+	 */
+	public static boolean setDateProperty(final Node node, final String name,
+			final Date date, final boolean autoSave) {
+		if (date != null) {
+			Calendar cal = new GregorianCalendar();
+			cal.setTime(date);
+			try {
+				node.setProperty(name, cal);
+				if (autoSave) {
+	                JcrUtil.save(node.getSession());
+	            }
+				return true;
+			} catch (ValueFormatException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			} catch (VersionException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			} catch (LockException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			} catch (ConstraintViolationException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			} catch (RepositoryException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			}
+		}
+		return false;
+	}
+	
+	/**
+     * Sets the date property value in the input node.
+     * @param node The node for which property is to be set.
+     * @param name The name of the property to be set.
+     * @param cal The calendar value to be set in the property.
+     * @return {@code true} if the property has been set; {@code false}
+     * if setting the property failed.
+     */
+	public static boolean setCalendarProperty(final Node node, final String name,
+			final Calendar cal) {
+		return JcrUtil.setCalendarProperty(node, name, cal, true);
+	}
+	
+	/**
+	 * Sets the date property value in the input node.
+     * @param node The node for which property is to be set.
+     * @param name The name of the property to be set.
+     * @param cal The calendar value to be set in the property.
+	 * @param autoSave {@code true} if property is to be saved after being set.
+	 * @return {@code true} if the property has been set; {@code false}
+     * if setting the property failed.
+	 */
+	public static boolean setCalendarProperty(final Node node, final String name,
+			final Calendar cal, final boolean autoSave) {
+		if (cal != null) {
+			try {
+				node.setProperty(name, cal);
+				if (autoSave) {
+	                JcrUtil.save(node.getSession());
+	            }
+				return true;
+			} catch (ValueFormatException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			} catch (VersionException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			} catch (LockException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			} catch (ConstraintViolationException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			} catch (RepositoryException e) {
+				LoggerUtil.errorLog(JcrUtil.class,
+						"Could not set property: {}", e);
+			}
+		}
+		return false;
+	}
+
+    /**
+     * Safely save session.
+     *
+     * @param session
+     *            Session
+     */
+    public static synchronized void save(final Session session,final Node node) {
+        try {
+        	if(!node.isCheckedOut()){
+           	 LoggerUtil.debugLog(JcrUtil.class,"Inside synchronized save method, Operating node is not checked out; "
+           	 		+ "checking out current node  -->"+node.getPath());
+           	 VersionManager vm = session.getWorkspace().getVersionManager();
+           	 vm.checkout(node.getParent().getParent().getPath());
+            }
+            if (session != null && session.hasPendingChanges()) {
+                session.refresh(true);
+                session.save();
+            }
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Could not save session: ", e);
+        }
+    }
+    
+    
+    /**
+     * Safely save session.
+     *
+     * @param session
+     *            Session
+     */
+    public static void save(final Session session) {
+        try {
+            if (session != null && session.hasPendingChanges()) {
+                session.refresh(true);
+                session.save();
+            }
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Could not save session: ", e);
+        }
+    }
+
+    /**
+     * Extract property.
+     *
+     * @param node
+     *            the node
+     * @param property
+     *            the property
+     * @return the string
+     */
+    public static String extractProperty(final Node node, final String property) {
+        String name = StringUtils.EMPTY;
+        try {
+            if (node.hasProperty(property)
+                    && (node.getProperty(property).isMultiple())) {
+                final Value[] values = node.getProperty(property).getValues();
+                final StringBuilder sBuild = new StringBuilder();
+                for (int i = 0; i < values.length; i++) {
+                    if (i < (values.length - 1)) {
+                        sBuild.append(values[i].getString()).append(',');
+                    } else {
+                        sBuild.append(values[i].getString());
+                    }
+                }
+                name = sBuild.toString();
+            } else if (node.hasProperty(property)) {
+                name = node.getProperty(property).getString();
+            }
+        } catch (final PathNotFoundException pnfe) {
+            LoggerUtil
+                    .errorLog(
+                            JcrUtil.class,
+                            "PathNotFoundException exception occured while getting property {0}: {1}",
+                            property, pnfe);
+        } catch (final ValueFormatException vfe) {
+            LoggerUtil
+                    .errorLog(
+                            JcrUtil.class,
+                            "ValueFormatException exception occured while getting property {0}: {1}",
+                            property, vfe);
+        } catch (final RepositoryException rfe) {
+            LoggerUtil
+                    .errorLog(
+                            JcrUtil.class,
+                            "RepositoryException exception occured while getting property {0}: {1}",
+                            property, rfe);
+        }
+        return name;
+    }
+
+    
+    
+    /* Start: Changes done for CR- Form Customization
+     * Wave 1.5 */
+    
+
+    /**
+     * Create file
+     * @param parentNode Parent node
+    * @param name File node name
+     * @param data File data
+     * @param mimeType Mime type
+     * @param autoSave Auto save?
+     * @return File node
+     */
+    public static Node createFile(Node parentNode, final String name, final InputStream data,
+                                  final String mimeType, final boolean autoSave) {
+        try {
+            String fileName = (StringUtils.contains(name, "\\"))
+                ? StringUtils.substringAfterLast(name, "\\")
+                : name;
+            Node fileNode = parentNode.addNode(fileName, JcrConstants.NT_FILE);
+            Node resNode = fileNode.addNode(JcrConstants.JCR_CONTENT, JcrConstants.NT_RESOURCE);
+            final ValueFactory valueFactory = resNode.getSession().getValueFactory();
+            resNode.setProperty(JcrConstants.JCR_DATA, valueFactory.createBinary(data));
+            resNode.setProperty(JcrConstants.JCR_MIMETYPE, mimeType);
+            if (autoSave) {
+                save(resNode.getSession());
+            }
+            return fileNode;
+        }
+        catch (RepositoryException e) {	
+            LoggerUtil
+            .errorLog(
+                    JcrUtil.class,
+                    "RepositoryException exception occured while createFile");
+            
+        }
+        return null;
+    }
+    
+    /* End: Changes done for CR- Form Customization
+     * Wave 1.5 */
+    
+	/**
+	 * Fetches a node if it exists at the absolute path or creates a node at the
+	 * specified absolute path if it does not already exists.
+	 * 
+	 * @param absolutePath
+	 *            The path where node has to be created.
+	 * @param nodeType
+	 *            The node type.
+	 * @param session
+	 *            The session object.
+	 * @return Node fetched from / created at the specified absolute path.
+	 */
+	public static Node createNode(String absolutePath, String nodeType,
+			Session session) {
+		Node node = null;
+		try {
+			node = com.day.cq.commons.jcr.JcrUtil.createPath(absolutePath,
+					nodeType, session);
+			JcrUtil.save(session);
+		} catch (RepositoryException re) {
+			LoggerUtil.errorLog(JcrUtil.class,
+					"Reporsitory Exception while creating node [{}].\n{}",
+					absolutePath, re);
+		}
+		return node;
+	}
+	
+	
+	public static Calendar getPropertyExpirydate(final Node node,
+            final String name) {
+
+        try {
+            final Property property = JcrUtil.getProperty(node, name);
+            if (property != null) {
+                if (property.getType() == PropertyType.DATE) {
+                    return property.getDate();
+                } else if (property.getType() == PropertyType.STRING) {
+                    final String dateStr = property.getString();
+                    final Date date = DateUtils.parseDate(dateStr,
+                            new String[] { Constants.FORMAT_DATE_SHORT });
+                    final Calendar cal = Calendar.getInstance();
+                    cal.setTime(date);
+                    return cal;
+                }
+                return property.getDate();
+            }
+        } catch (final ParseException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "ParseExceptionn", e);
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(JcrUtil.class, "Repository Exception", e);
+        }
+        return null;
+    }
+}

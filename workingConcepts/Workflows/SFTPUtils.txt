@@ -1,0 +1,4643 @@
+FullHoldingsFileProcessing.java
+
+------------------------------------------------------------------------------------------------------------------
+package com.thehartford.thf.workflows;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.jcr.AccessDeniedException;
+import javax.jcr.InvalidItemStateException;
+import javax.jcr.ItemExistsException;
+import javax.jcr.Node;
+import javax.jcr.NodeIterator;
+import javax.jcr.PathNotFoundException;
+import javax.jcr.ReferentialIntegrityException;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.jcr.ValueFormatException;
+import javax.jcr.lock.LockException;
+import javax.jcr.nodetype.ConstraintViolationException;
+import javax.jcr.nodetype.NoSuchNodeTypeException;
+import javax.jcr.version.VersionException;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.WordUtils;
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Properties;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.Service;
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.apache.sling.jcr.api.SlingRepository;
+import org.osgi.framework.Constants;
+
+import com.day.cq.dam.api.Asset;
+import com.day.cq.dam.api.AssetManager;
+import com.day.cq.dam.commons.process.AbstractAssetWorkflowProcess;
+import com.day.cq.dam.commons.util.DamUtil;
+import com.day.cq.replication.ReplicationActionType;
+import com.day.cq.replication.ReplicationException;
+import com.day.cq.replication.Replicator;
+import com.day.cq.tagging.Tag;
+import com.day.cq.tagging.TagManager;
+import com.day.cq.workflow.WorkflowException;
+import com.day.cq.workflow.WorkflowSession;
+import com.day.cq.workflow.exec.WorkItem;
+import com.day.cq.workflow.exec.WorkflowData;
+import com.day.cq.workflow.exec.WorkflowProcess;
+import com.day.cq.workflow.metadata.MetaDataMap;
+import com.thehartford.thf.core.common.vo.ConfigurationServiceVO;
+import com.thehartford.thf.core.configmanagement.ConfigService;
+import com.thehartford.thf.core.configmanagement.ConfigServiceII;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.mail.GenericMailService;
+import com.thehartford.thf.core.mail.impl.MailConstants;
+import com.thehartford.thf.core.scheduler.GenericSynthesisConfiguration;
+import com.thehartford.thf.core.scheduler.GenericSynthesisService;
+import com.thehartford.thf.core.scheduler.impl.SchedulerConstants;
+import com.thehartford.thf.core.util.UUIDUtil;
+import com.thehartford.thf.integration.ftp.constant.FTPConstants;
+import com.thehartford.thf.integration.persistence.util.CSVUtil;
+import com.thehartford.thf.ui.services.AdminSessionService;
+import com.thehartford.thf.utils.JcrUtil;
+import com.thehartford.thf.utils.PropertyConstants;
+import com.thehartford.thf.utils.SearchUtil;
+
+/**
+ * The Class SynthesisMigrationProcess for Migration from Synthesis.
+ */
+@Component
+@Service
+@Properties({
+		@Property(name = Constants.SERVICE_DESCRIPTION, value = "Full Holdings Document Migration Process"),
+		@Property(name = Constants.SERVICE_VENDOR, value = "SapientNitro"),
+		@Property(name = "process.label", value = "Full Holdings Document Migration Process") })
+public class FullHoldingsMigrationProcess extends AbstractAssetWorkflowProcess
+		implements WorkflowProcess {
+
+	/** The Constant MONEY_MARKET_HLS_FUND. */
+	private static final String MONEY_MARKET_HLS_FUND = "Hartford_Money_Market_HLS_Fund";
+
+	/** The Constant FUNDDOCUMENTS_FULLHOLDINGS. */
+	private static final String FUNDDOCUMENTS_FULLHOLDINGS = "funddocuments/fullholdings/";
+
+	/** The Constant JCR_DATA. */
+	private static final String JCR_DATA = "jcr:data";
+
+	/** The Constant CSV_FILE_PATH. */
+	private static final String CSV_FILE_PATH = "/content/dam/thf/en/documents/FullHoldings.csv/jcr:content/renditions/original/jcr:content";
+
+	@Reference
+	private GenericMailService genericMailService;
+	
+	@Reference
+	private AdminSessionService adminsession;
+
+	/**
+	 * The reference to the GenericSynthesisService.
+	 */
+	@Reference
+	private transient GenericSynthesisService genericSynthesisService;
+
+	/** The synthesis workflow service. */
+	@Reference
+	private transient SynthesisWorkflowService synthesisWorkflowService;
+
+	/** The configuration service vo. */
+	public ConfigurationServiceVO configurationServiceVO = null;
+
+	/** The resource resolver factory. */
+	@Reference
+	private ResourceResolverFactory resourceResolverFactory;
+
+	/** The config service. */
+	@Reference
+	private ConfigService configService;
+	
+	/** The config service II */
+	@Reference
+	private ConfigServiceII configServiceII;
+	
+
+	/** The sling repository. */
+	@Reference
+	SlingRepository slingRepository;
+
+	/** The resource resolver. */
+	private ResourceResolver resourceResolver;
+
+	/** The session. */
+	private Session jcrSession;
+
+	/** The config. */
+	private GenericSynthesisConfiguration config = null;
+
+	/** The asset manager. */
+	private AssetManager assetManager = null;
+
+	/** The tag manager. */
+	private TagManager tagManager;
+
+	/** The Constant CHECKBOX_PROPERTY_ON_VAL. */
+	private static final String CHECKBOX_PROPERTY_ON_VAL = "on";
+
+	/** The csv rows list. */
+	private List<Map<String, Object>> csvRowsList;
+
+	/** The Constant for type pdf. */
+	private static final String PDF_MIME = "application/pdf";
+
+	/** The row counter. */
+	private Integer rowCounter;
+
+	/** The Constant COLUMN_ALLOCATION_FUNDS. */
+	private static final String COLUMN_ALLOCATION_FUNDS = "Allocation Funds & Target Retirement Funds";
+
+	/** The Constant COLUMN_HLS_FUNDS. */
+	private static final String COLUMN_HLS_FUNDS = "All other Retail and HLS Funds ";
+	
+	/** The Constant COLUMN_ETF_FUNDS. */
+	private static final String COLUMN_ETF_FUNDS = "ETF Funds";
+
+	/** The Constant DESCRIPTION. */
+	private static final String DESCRIPTION = "Description";
+
+	/** The Constant AUTHENTICATION_REQUIRED_YES_NO. */
+	private static final String AUTHENTICATION_REQUIRED_YES_NO = "Authentication Required - Yes/No";
+
+	/** The Constant COLUMN_DESCRIPTION. */
+	private static final String COLUMN_DESCRIPTION = "Description";
+
+	/** The Constant COLUMN_AUTHENTICATION_REQUIRED_YES_NO. */
+	private static final String COLUMN_AUTHENTICATION_REQUIRED_YES_NO = "Authentication Required "
+			+ "- Yes/No";
+
+	/** The Constant COLUMN_TITLE. */
+	private static final String COLUMN_TITLE = "Title";
+
+	/** The Constant for column name for document or file name. */
+	private static final String COLUMN_DOC_FILENAME = "Document Name / File Name";
+
+	/** The Constant for column name for document or file name. */
+	private static final String COLUMN_PIECECODE = "Piece Code";
+
+	/** The Constant DISTANT_DATE. */
+	private static final String DISTANT_DATE = "12/31/2050";
+
+	/** The Constant AUTH_FOLDER. */
+	private static final String AUTH_FOLDER = "/content/dam/thf/en/docs/auth";
+
+	/** The Constant PUBLIC_FOLDER. */
+	private static final String PUBLIC_FOLDER = "/content/dam/thf/en/docs/pub";
+
+	/** The Constant COLUMN_DOCUMENT_SOURCE. */
+	private static final String COLUMN_DOCUMENT_SOURCE = "Document Source (Synthesis / "
+			+ "Broadridge / Morningstar / Manually Uploaded to CMS)";
+
+	/** The Constant JCR_CONTENT_NODE. */
+	private static final String JCR_CONTENT_NODE = "jcr:content";
+
+	// private static final String RENDITIONS_NODE = "renditons";
+
+	/** The Constant METADATA_NODE. */
+	private static final String METADATA_NODE = "metadata";
+
+	/** The Constant PROPERTYVALUE_NOT_FOUND_NA. */
+	private static final String PROPERTYVALUE_NOT_FOUND_NA = "N/A";
+
+	/** The Constant LOG_FOR. */
+	private static final String LOG_FOR = " for ";
+
+	/** The Constant LOG_NO_VALUE. */
+	private static final String LOG_NO_VALUE = "No Value for column: {} for filename: {} at row # {} ";
+
+	/** The Constant STRING_SEMI_COLON. */
+	private static final String STRING_SEMI_COLON = ";";
+
+	/** The Constant STRING_BRACES. */
+	private static final String STRING_BRACES = "])";
+
+	/** The Constant STRING_CLOSING_BRACE. */
+	private static final String STRING_CLOSING_BRACE = "')";
+
+	/** The Constant STRING_S. */
+	private static final String STRING_S = "s";
+
+	/** The Constant AT_ROW. */
+	private static final String AT_ROW = " at row # ";
+
+	/** The Constant STRING_NO_SPACE. */
+	private static final String STRING_NO_SPACE = "No ";
+
+	/** The Constant ALL. */
+	private static final String ALL = "All";
+
+	/** The Constant DOCUMENT_TYPE. */
+	private static final String DOCUMENT_TYPE = "Document Type";
+
+	/** The Constant KEYWORDS. */
+	private static final String KEYWORDS = "Keywords";
+
+	/** The Constant FORM_NUMBER. */
+	private static final String FORM_NUMBER = "Form Number";
+
+	/** The Constant UPDATE_FREQUENCY. */
+	private static final String UPDATE_FREQUENCY = "Update Frequency";
+
+	/** The Constant MAX_COPIES_AVAILABLE_FOR_ORDER. */
+	private static final String MAX_COPIES_AVAILABLE_FOR_ORDER = "Max Copies Available for Order";
+
+	/** The Constant STRING_Y. */
+	private static final String STRING_Y = "Y";
+
+	/** The Constant STRING_N. */
+	private static final String STRING_N = "N";
+
+	/** The Constant STRING_NO. */
+	private static final String STRING_NO = "No";
+
+	/** The Constant VALUE_NO. */
+	private static final String VALUE_NO = "No";
+
+	/** The Constant DC_TITLE. */
+	private static final String DC_TITLE = "dc:title";
+
+	/** The rows processed status. */
+	private final Map<Integer, String> rowsProcessedStatus = new TreeMap<Integer, String>();
+
+	/** The Constant finraFolderPath. */
+	protected static final String finraFolderPath = "/finra";
+
+	/** The Constant for query select. */
+	private static final String QUERY_SELECT = "SELECT * FROM [nt:base] AS s WHERE ISDESCENDANTNODE([";
+
+	/** The Constant for query select. */
+	private static final String QUERY_AND_TITLE = "]) AND (s.[jcr:title] = '";
+
+	/** The Constant JCR_DATE_FORMAT. */
+	private static final String MMDDYYYY_FORMAT = "MM/dd/yyyy";
+
+	/** The Constant MMDDYYYY_PATTERN. */
+
+	private static final String MMDDYYYY_PATTERN = "^([0]?[1-9]|[1][0-2])[/]([0]?[1-9]|"
+			+ "[1|2][0-9]|[3][0|1])[/]([0-9]{4}|[0-9]{2})$";
+
+	/** The Constant damRootPath. */
+	protected static final String damRootPath = "/content/dam/thf/en/docs";
+
+	// private static final String COMMENTARY_TYPE = "Commentary";
+
+	/** The Constant VALUE_YES. */
+	private static final String VALUE_YES = "Yes";
+
+	/** The Constant for query select. */
+	private static final String LOG_NO_TAG = "No Tag Discovered for {} ";
+
+	/** The Constant THF_TAGS_FUNDS. */
+	private static final String THF_TAGS_FUNDS = "/etc/tags/thf/funds";
+
+	/** The Constant THF_TAGS_RESOURCES. */
+	private static final String THF_TAGS_RESOURCES = "/etc/tags/thf/resources";
+
+	/** The Constant THF_TAGS_FIRM. */
+	private static final String THF_TAGS_FIRM = "/etc/tags/thf/firm";
+
+	/** The Constant THF_TAGS_AUDIENCE. */
+	private static final String THF_TAGS_AUDIENCE = "/etc/tags/thf/audience";
+
+	/** The Constant THF_TAGS_ROLE. */
+	private static final String THF_TAGS_ROLE = "/etc/tags/thf/role";
+
+	/** The Constant JCR_TITLE_OR. */
+	private static final String JCR_TITLE_OR = "' OR s.[jcr:title] = '";
+
+	/** The Constant damAuthenticablePath. */
+	protected static final String damAuthenticablePath = "/auth";
+
+	/** The Constant damPublicPath. */
+	protected static final String damPublicPath = "/pub";
+
+	/** The map documents to be mailed. */
+	final Map<String, Object> mapDocumentsToBeMailed = new HashMap<String, Object>();
+
+	/** The map documents to be mailed. */
+	final Map<String, Object> mapDocumentsFailedToPublish = new HashMap<String, Object>();
+
+	/** The map documents to be mailed. */
+	final Map<String, Object> mapDocumentsPublished = new HashMap<String, Object>();
+
+	/** The Constant LIST_PAGES_TOBE_MAILED. */
+	private static final String LIST_DOCUMENTS_TOBE_MAILED = "listOfDocumentsToBeMailed";
+
+	/** The Constant LIST_PAGES_TOBE_MAILED. */
+	private static final String LIST_DOCUMENTS_NOT_PUBLISHED = "listOfDocumentsFailed";
+
+	/** The Constant LIST_PAGES_TOBE_MAILED. */
+	private static final String LIST_DOUMENTS_PUBLISHED = "listOfDocumentsToBePublished";
+
+	/** The constant WORKFLOW_DATA_KEY_EMAIL_PROPERTY_MAP. */
+	public static final String WORKFLOW_DATA_KEY_EMAIL_PROPERTY_MAP = "EmailProperties";
+
+	/** The replication service. */
+	@Reference
+	private Replicator replicationService;
+
+	/*
+	 * (non-Javadoc)
+	 * 
+	 * @see
+	 * com.day.cq.workflow.exec.WorkflowProcess#execute(com.day.cq.workflow.
+	 * exec.WorkItem, com.day.cq.workflow.WorkflowSession,
+	 * com.day.cq.workflow.metadata.MetaDataMap)
+	 */
+	@Override
+	public void execute(final WorkItem workItem,
+			final WorkflowSession workflowSession, final MetaDataMap metaDataMap)
+			throws WorkflowException {
+		ResourceResolver resourceResolverNew =null;
+		try {
+
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"Inside execute() method of FullHoldingsMigration");
+			/** The documents failed publish. */
+			List<String> documentsFailedPublish = new ArrayList<String>();
+
+			/** The documents published. */
+			List<String> documentsPublished = new ArrayList<String>();
+
+			/** The allocation funds. */
+			List<String> allocationFunds = new ArrayList<String>();
+
+			/** The hls funds. */
+			List<String> hlsFunds = new ArrayList<String>();
+
+			/** The all funds. */
+			List<String> allFunds = new ArrayList<String>();
+			
+			/** The etf funds. */
+			List<String> etfFunds = new ArrayList<String>();
+
+			/** The money market files existing. */
+			List<String> moneyMarketFilesExisting = new ArrayList<String>();
+
+			/** The allocation funds files existing. */
+			List<String> allocationFundsFilesExisting = new ArrayList<String>();
+
+			/** The hls funds files existing. */
+			List<String> hlsFundsFilesExisting = new ArrayList<String>();
+			
+			/** The etf funds files existing. */
+			List<String> etfFundsFilesExisting = new ArrayList<String>();
+			final WorkflowData data = workItem.getWorkflowData();
+
+			try {
+				this.jcrSession = this.slingRepository.loginService(com.thehartford.thf.utils.Constants.FULL_HOLDINGS_MIGRATION_PROCESS, null);
+				Map<String, Object> param = new HashMap<String, Object>();
+				param.put(ResourceResolverFactory.SUBSERVICE, com.thehartford.thf.utils.Constants.FULL_HOLDINGS_MIGRATION_PROCESS);
+            	
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,"Before getting resource resolver");
+				
+				resourceResolverNew = adminsession.getAdministrativeResourceResolver();
+				
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,"After getting resource resolver");
+				if(resourceResolverNew!=null){
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,"Obtained resource resolver with user : "+resourceResolverNew.getUserID().toString());
+				}
+            	
+			} catch (final LoginException e) {
+				LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+						"LoginException caught {}", e);
+			} catch (final RepositoryException e) {
+				LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+						"RepositoryException caught {}", e);
+			} catch (final Exception e) {
+				LoggerUtil
+						.errorLog(
+								FullHoldingsMigrationProcess.class,
+								"\n\n\n Exception while getting session in FullHoldingsMigrationProcess{}",
+								e);
+			}
+			this.tagManager = resourceResolverNew.adaptTo(TagManager.class);
+
+			if (this.genericSynthesisService != null) {
+				this.config = this.genericSynthesisService
+						.getGenericSynthesisConfiguration(SchedulerConstants.FULL_HOLDINGS_MIGRATION);
+				if (null != this.config) {
+					this.configurationServiceVO = this.config
+							.getConfigurationServiceVO();
+
+				}
+			}
+
+			this.assetManager = resourceResolverNew.adaptTo(AssetManager.class);
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Retrieved assetManager {}",
+					assetManager);
+
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"calling() uploadFullHoldingsDocuments");
+			this.uploadFullHoldingsDocuments(mapDocumentsToBeMailed,
+					documentsFailedPublish, documentsPublished,
+					allocationFunds, hlsFunds, allFunds,etfFunds,
+					moneyMarketFilesExisting, allocationFundsFilesExisting,
+					hlsFundsFilesExisting,etfFundsFilesExisting);
+			if (this.jcrSession != null) {
+				try {
+					if (this.jcrSession.hasPendingChanges()) {
+						this.jcrSession.save();
+					}
+
+				} catch (AccessDeniedException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"AccessDeniedException caught {}", e);
+				} catch (ItemExistsException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"ItemExistsException caught {}", e);
+				} catch (ReferentialIntegrityException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"ReferentialIntegrityException caught {}", e);
+				} catch (ConstraintViolationException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"ConstraintViolationException caught {}", e);
+				} catch (InvalidItemStateException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"InvalidItemStateException caught {}", e);
+				} catch (VersionException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"VersionException caught {}", e);
+				} catch (LockException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"LockException caught {}", e);
+				} catch (NoSuchNodeTypeException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"NoSuchNodeTypeException caught {}", e);
+				} catch (RepositoryException e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"RepositoryException caught {}", e);
+				} catch (final Exception e) {
+					LoggerUtil
+							.errorLog(
+									FullHoldingsMigrationProcess.class,
+									"\n\n\n Exception while uploading documents in FullHoldingsMigrationProcess{}",
+									e);
+					
+				}
+				this.jcrSession.logout();
+				this.jcrSession = null;
+			}
+
+			sendFTPSuccessEmail(workItem, workflowSession, data,
+					documentsFailedPublish, documentsPublished,
+					allocationFunds, hlsFunds, allFunds,etfFunds,
+					moneyMarketFilesExisting, allocationFundsFilesExisting,
+					hlsFundsFilesExisting,etfFundsFilesExisting);
+		} catch (Exception e) {
+			LoggerUtil
+					.errorLog(
+							FullHoldingsMigrationProcess.class,
+							"\n\n\n\n\n Some Exception caught in execute method of FullHoldingsMigraitonProcss: [{}]",
+							e);
+			sendGenericFailureMail(e.getMessage());
+		}
+
+	}
+
+	/**
+	 * Send ftp success email.
+	 * 
+	 * @param workItem
+	 *            the work item
+	 * @param workflowSession
+	 *            the workflow session
+	 * @param data
+	 *            the data
+	 * @param hlsFundsFilesExisting
+	 * @param allocationFundsFilesExisting
+	 * @param moneyMarketFilesExisting
+	 * @param allFunds
+	 * @param hlsFunds
+	 * @param allocationFunds
+	 * @param documentsPublished
+	 * @param documentsFailedPublish
+	 * @param etfFundsFilesExisting 
+	 * @param etfFunds 
+	 */
+	private void sendFTPSuccessEmail(final WorkItem workItem,
+			final WorkflowSession workflowSession, final WorkflowData data,
+			List<String> documentsFailedPublish,
+			List<String> documentsPublished, List<String> allocationFunds,
+			List<String> hlsFunds, List<String> allFunds,List<String> etfFunds,
+			List<String> moneyMarketFilesExisting,
+			List<String> allocationFundsFilesExisting,
+			List<String> hlsFundsFilesExisting,  List<String> etfFundsFilesExisting) {
+		try {
+
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"FullHoldingsMigrationProcess : Inside sendFTPSuccessEmail() with: \n :"
+							+ "\n workItem : ["
+							+ workItem
+							+ "]"
+							+ "\n workflowSession : ["
+							+ workflowSession
+							+ "]"
+							+ "\n data : ["
+							+ data
+							+ "]"
+							+ "\n documentsFailedPublish : ["
+							+ documentsFailedPublish
+							+ "]"
+							+ "\n documentsPublished : ["
+							+ documentsPublished
+							+ "]"
+							+ "\n allocationFunds : ["
+							+ allocationFunds
+							+ "]"
+							+ "\n hlsFunds : ["
+							+ hlsFunds
+							+ "]"
+							+ "\n allFunds : ["
+							+ allFunds
+							+ "]"
+							+ "\n etfFunds : ["
+							+ etfFunds
+							+ "]"
+							+ "\n moneyMarketFilesExisting : ["
+							+ moneyMarketFilesExisting
+							+ "]"
+							+ "\n allocationFundsFilesExisting : ["
+							+ allocationFundsFilesExisting
+							+ "]"
+							+ "\n hlsFundsFilesExisting : ["
+							+ hlsFundsFilesExisting + "]"
+							+ "]"
+							+ "\n etfFundsFilesExisting : ["
+							+ etfFundsFilesExisting + "]");
+
+			// Create map of documents missing from FTP
+			int currentDayOfMonth = this.getCurrentDayOfMonth();
+			if (currentDayOfMonth == this
+					.getBusinessDayForMoneyMarket(this.configService
+							.getMoneyMarketFundsDay())) {
+				if (moneyMarketFilesExisting.isEmpty()) {
+					mapDocumentsToBeMailed.put(LIST_DOCUMENTS_TOBE_MAILED,
+							"No Money Market File uploaded to DAM");
+				}
+
+			}
+			if (currentDayOfMonth == this.configService.getAllocationFundsDay()) {
+				allocationFunds.removeAll(allocationFundsFilesExisting);
+				allFunds.addAll(allocationFunds);
+				mapDocumentsToBeMailed
+						.put(LIST_DOCUMENTS_TOBE_MAILED, allFunds);
+			}
+			if (currentDayOfMonth == this.configService.getHlsFundsDay()) {
+				hlsFunds.removeAll(hlsFundsFilesExisting);
+				allFunds.addAll(hlsFunds);
+				mapDocumentsToBeMailed
+						.put(LIST_DOCUMENTS_TOBE_MAILED, allFunds);
+			}
+
+			if (mapDocumentsToBeMailed.isEmpty()) {
+				mapDocumentsToBeMailed.put(LIST_DOCUMENTS_TOBE_MAILED, "none");
+			}
+			data.getMetaDataMap().put(
+					MailConstants.WORFLOW_DATA_KEY_MAIL_CATEGORY,
+					MailConstants.INTERNAL_GENERIC_EMAIL);
+			if (documentsFailedPublish.isEmpty()) {
+				mapDocumentsToBeMailed
+						.put(LIST_DOCUMENTS_NOT_PUBLISHED, "none");
+			} else {
+				mapDocumentsToBeMailed.put(LIST_DOCUMENTS_NOT_PUBLISHED,
+						documentsFailedPublish);
+			}
+			if (documentsPublished.isEmpty()) {
+				mapDocumentsToBeMailed.put(LIST_DOUMENTS_PUBLISHED, "none");
+			} else {
+				mapDocumentsToBeMailed.put(LIST_DOUMENTS_PUBLISHED,
+						documentsPublished);
+			}
+			data.getMetaDataMap().put(
+					MailConstants.WORKFLOW_DATA_KEY_EMAIL_PROPERTY_MAP,
+					mapDocumentsToBeMailed);
+
+			StringBuilder table = new StringBuilder();
+			String[] recipients = configService.getAdminEmailId();
+
+			int maxSize = 0;
+			if (null == allFunds) {
+				allFunds = new ArrayList<String>();
+			}
+
+			if (null == documentsFailedPublish) {
+				documentsFailedPublish = new ArrayList<String>();
+			}
+
+			if (null == documentsPublished) {
+				documentsPublished = new ArrayList<String>();
+			}
+
+			maxSize = Math.max(
+					allFunds.size(),
+					Math.max(documentsFailedPublish.size(),
+							documentsPublished.size()));
+
+			if (maxSize < 1) {
+				table.append("No results to share. Please look into the issue.");
+
+			} else {
+				recipients = configServiceII.getFullHoldingsReportRecipients();
+				table.append("<table border=1>");
+
+				table.append("<tr class='header'>"
+						+ "<th><b>File(s) published</b></th>"
+						+ "<th><b>File(s) failed to publish</b></th>"
+						+ "<th><b>File(s) not present on SFTP server</b></th>"
+						+ "</tr>");
+				String fileNameText = "";
+				for (int i = 0; i < maxSize; i++) {
+					if (i % 2 == 0) {
+						table.append("<tr class='oddRow'>");
+					} else {
+						table.append("<tr>");
+					}
+
+					fileNameText = "";
+					if (i < documentsPublished.size()) {
+						fileNameText = documentsPublished.get(i);
+						table.append("<td><a href='" + configService.getOnsiteAuthorBaseUrl() + "/damadmin#" 
+								+ fileNameText + "'>" + fileNameText.substring(fileNameText .lastIndexOf("/")+1) + "</a></td>");
+					} else {
+						table.append("<td></td>");
+					}
+					
+					fileNameText = "";
+					if (i < documentsFailedPublish.size()) {
+						fileNameText = documentsFailedPublish.get(i);
+						table.append("<td><a href='" + configService.getOnsiteAuthorBaseUrl() + "/damadmin#" 
+								+ fileNameText + "'>" + fileNameText.substring(fileNameText .lastIndexOf("/")+1) + "</a></td>");
+					} else {
+						table.append("<td></td>");
+					}
+					
+					fileNameText = "";
+					if (i < allFunds.size()) {
+						fileNameText = allFunds.get(i);
+					} else {
+						fileNameText = "";
+					}
+					table.append("<td>" + fileNameText + "</td>");
+
+					table.append("</tr>");
+				}
+
+				table.append("</table>");
+			}
+
+			Map<String, Object> mailProperties = new HashMap<String, Object>();
+			mailProperties.put("subject", "Status of Full holdings Workflow");
+
+			mailProperties.put("salutation",
+					MailUtils.getServerInformation(configService)
+							+ "<br/><br/>");
+			mailProperties.put("table", table);
+
+			MailUtils.sendMail(recipients, mailProperties, genericMailService);
+			LoggerUtil.infoLog(FullHoldingsMigrationProcess.class,
+					"FullHoldingsMigrationProcess : Email sent");
+
+			// set custom properties
+			/*
+			 * String[] keyValue = null; try { keyValue =
+			 * WorkflowUtils.setMailProperties(workItem, workflowSession,
+			 * this.configService.getAuthorBaseUrl()); } catch
+			 * (RepositoryException repositoryException) {
+			 * LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+			 * "Repository exception : Cannot set mail properties : ",
+			 * repositoryException); } if (null != keyValue) {
+			 * data.getMetaDataMap().put("CustomProperties", keyValue); }
+			 * workflowSession.updateWorkflowData(workItem.getWorkflow(), data);
+			 */
+			LoggerUtil
+					.infoLog(
+							FullHoldingsMigrationProcess.class,
+							"FullHoldingsMigrationProcess : Exiting sendFTPSuccessEmail() with metadatamap : {}",
+							data.getMetaDataMap());
+		} catch (final Exception e) {
+			LoggerUtil
+					.errorLog(
+							FullHoldingsMigrationProcess.class,
+							"\n\n\n Exception while getting session in FullHoldingsMigrationProcess{}",
+							e);
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * Upload full holdings documents.
+	 * 
+	 * @param mapDocumentsToBeMailed
+	 *            the map documents to be mailed
+	 * @param etfFundsFilesExisting 
+	 * @param etfFunds
+	 */
+	private void uploadFullHoldingsDocuments(
+			Map<String, Object> mapDocumentsToBeMailed,
+			List<String> documentsFailedPublish,
+			List<String> documentsPublished, List<String> allocationFunds,
+			List<String> hlsFunds, List<String> allFunds, List<String> etfFunds,
+			List<String> moneyMarketFilesExisting,
+			List<String> allocationFundsFilesExisting,
+			List<String> hlsFundsFilesExisting, List<String> etfFundsFilesExisting) {
+		try{
+			
+		
+		LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+				"Inside FullHoldingsMigrationProcess : uploadFullHoldingsDocuments() with: \n "
+						+ "mapDocumentsToBeMailed:["
+						+ mapDocumentsToBeMailed
+						+ "] \n,\n "
+						+ "documentsFailedPublish: ["
+						+ documentsFailedPublish
+						+ "] \n, \n "
+						+ "documentsPublished: ["
+						+ documentsPublished
+						+ "] \n, \n "
+						+ "allocationFunds: ["
+						+ allocationFunds
+						+ "] \n, \n "
+						+ "hlsFunds: ["
+						+ hlsFunds
+						+ "] \n, \n "
+						+ "allFunds: ["
+						+ allFunds
+						+ "] \n, \n "
+						+ etfFunds
+						+ "] \n, \n "
+						+ "moneyMarketFilesExisting: ["
+						+ moneyMarketFilesExisting
+						+ "] \n, \n "
+						+ "allocationFundsFilesExisting: ["
+						+ allocationFundsFilesExisting
+						+ "] \n, \n "
+						+ "hlsFundsFilesExisting: ["
+						+ hlsFundsFilesExisting
+						+ "] \n, \n "
+						+ "etfFundsFilesExisting: ["
+						+ etfFundsFilesExisting
+						+ "]");
+
+		if (this.synthesisWorkflowService != null && null != this.config) {
+			// Step 1: Connect to FTP Server - and Download the Migration
+			// SpreadSheet to local
+			final String ftpdownloadStatus = this.synthesisWorkflowService
+					.invokeFTPService(FTPConstants.FULLHOLDINGSDOWNLOAD, null,
+							this.config.getConfigurationServiceVO().getHost(),
+							this.config.getConfigurationServiceVO().getPort(),
+							this.config.getConfigurationServiceVO()
+									.getUserName(), this.config
+									.getConfigurationServiceVO().getPassword(),
+							this.config.getConfigurationServiceVO()
+									.getRemoteDir(), this.config
+									.getConfigurationServiceVO().getLocalDir(),
+							this.config.getConfigurationServiceVO()
+									.getFilePattern());
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"uploadFullHoldingsDocuments() : ftpdownloadStatus is found to be :"
+							+ ftpdownloadStatus);
+			// Populate list of allocation and hls funds
+			if (FTPConstants.SUCCESS.equals(ftpdownloadStatus)) {
+				LoggerUtil
+						.debugLog(FullHoldingsMigrationProcess.class,
+								"uploadFullHoldingsDocuments() : calling getFundList()");
+				getFundList(jcrSession, allocationFunds, hlsFunds ,etfFunds);
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"returned from getFundList()");
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Folder path: {}",
+						this.config.getConfigurationServiceVO().getLocalDir());
+
+				final File folder = new File(this.config
+						.getConfigurationServiceVO().getLocalDir());
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Folder path: {}",
+						this.config.getConfigurationServiceVO().getLocalDir());
+				LoggerUtil
+						.debugLog(FullHoldingsMigrationProcess.class,
+								"uploadFullHoldingsDocuments() : calling uploadFullHoldingsDocuments() v2");
+				this.uploadFullHoldingsDocuments(folder, jcrSession,
+						mapDocumentsToBeMailed, documentsFailedPublish,
+						documentsPublished, allocationFunds, hlsFunds,
+						allFunds,etfFunds, moneyMarketFilesExisting,
+						allocationFundsFilesExisting, hlsFundsFilesExisting,etfFundsFilesExisting);
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"returned from uploadFullHoldingsDocuments method...");
+			}
+
+		}
+		}catch (final Exception e) {
+			LoggerUtil
+			.errorLog(
+					FullHoldingsMigrationProcess.class,
+					"\n\n\n Exception in private uploadFullHoldingsDocuments method [{}]",
+					e);
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * Upload synthesis documents from local repository.
+	 * 
+	 * @param folder
+	 *            the folder, from which need to upload the files
+	 * @param jcrSession
+	 *            the jcr session
+	 * @param mapDocumentsToBeMailed
+	 *            the map documents to be mailed
+	 * @param hlsFundsFilesExisting
+	 * @param allocationFundsFilesExisting
+	 * @param moneyMarketFilesExisting
+	 * @param allFunds
+	 * @param hlsFunds
+	 * @param allocationFunds
+	 * @param documentsPublished
+	 * @param documentsFailedPublish
+	 * @param etfFunds
+	 * @param etfFundsFilesExisting 
+	 */
+	public void uploadFullHoldingsDocuments(final File folder,
+			final Session jcrSession,
+			Map<String, Object> mapDocumentsToBeMailed,
+			List<String> documentsFailedPublish,
+			List<String> documentsPublished, List<String> allocationFunds,
+			List<String> hlsFunds, List<String> allFunds, List<String> etfFunds,
+			List<String> moneyMarketFilesExisting,
+			List<String> allocationFundsFilesExisting,
+			List<String> hlsFundsFilesExisting, List<String> etfFundsFilesExisting) {
+		try{
+			
+		
+		LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+				"Inside FullHoldingsMigrationProcess : uploadFullHoldingsDocuments() with: \n "
+						+ "mapDocumentsToBeMailed:["
+						+ mapDocumentsToBeMailed
+						+ "] \n,\n "
+						+ "documentsFailedPublish: ["
+						+ documentsFailedPublish
+						+ "] \n, \n "
+						+ "documentsPublished: ["
+						+ documentsPublished
+						+ "] \n, \n "
+						+ "allocationFunds: ["
+						+ allocationFunds
+						+ "] \n, \n "
+						+ "hlsFunds: ["
+						+ hlsFunds
+						+ "] \n, \n "
+						+ "allFunds: ["
+						+ allFunds
+						+ "] \n, \n "
+						+ etfFunds
+						+ "] \n, \n "
+						+ "moneyMarketFilesExisting: ["
+						+ moneyMarketFilesExisting
+						+ "] \n, \n "
+						+ "allocationFundsFilesExisting: ["
+						+ allocationFundsFilesExisting
+						+ "] \n, \n "
+						+ "hlsFundsFilesExisting: ["
+						+ hlsFundsFilesExisting
+						+ "] \n, \n "
+					    + "etfFundsFilesExisting: ["
+						+ etfFundsFilesExisting
+						+ "]");
+
+		final String csvFilename = this.config.getConfigurationServiceVO()
+				.getFileName();
+		LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Value of csvFilename [{}]",
+				csvFilename);
+		String fileExtension = PDF_MIME;
+		// Get current day of month
+		int currentDayOfMonth = this.getCurrentDayOfMonth();
+		LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Value of currentDayOfMonth [{}]",
+				currentDayOfMonth);
+		for (final File fileEntry : folder.listFiles()) {
+			if (fileEntry.isDirectory()) { // If its a directory - keep looking
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"fileEntry [{}] is a directory", fileEntry.getName());
+				this.uploadFullHoldingsDocuments(fileEntry, jcrSession,
+						mapDocumentsToBeMailed, documentsFailedPublish,
+						documentsPublished, allocationFunds, hlsFunds,
+						allFunds, etfFunds, moneyMarketFilesExisting,
+						allocationFundsFilesExisting, hlsFundsFilesExisting, etfFundsFilesExisting);
+			} else { // Found a file - process it
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"fileEntry [{}] is a File", fileEntry.getName());
+				final int length = this.config.getConfigurationServiceVO()
+						.getLocalDir().length();
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "value of length [{}]",
+						length);
+				String path = fileEntry.getAbsolutePath().substring(length);
+				LoggerUtil
+						.debugLog(FullHoldingsMigrationProcess.class, "value of path [{}]", path);
+				if (StringUtils.startsWith(path,
+						PropertyConstants.SLASH.getValue())) {
+					path = StringUtils.stripStart(path,
+							PropertyConstants.SLASH.getValue());
+				}
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"value of path2 now is [{}]", path);
+				String fileName = fileEntry.getName();
+				// Add fullholdings path
+				path = FUNDDOCUMENTS_FULLHOLDINGS + fileName;
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"value of path3 now is [{}]", path);
+				Node destinationNode = null;
+				Node publicDocsNode = null;
+				try {
+					publicDocsNode = this.jcrSession.getNode(PUBLIC_FOLDER);
+				} catch (PathNotFoundException pathNotFoundException) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"Not able to get public folder",
+							pathNotFoundException);
+				} catch (RepositoryException repositoryException) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"Not able to get repository", repositoryException);
+				}
+				Node authDocsNode = null;
+				try {
+					authDocsNode = this.jcrSession.getNode(AUTH_FOLDER);
+				} catch (PathNotFoundException pathNotFoundException) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"Not able to get auth folder",
+							pathNotFoundException);
+				} catch (RepositoryException repositoryException) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"Not able to get auth repository",
+							repositoryException);
+				}
+				try {
+					if (authDocsNode.hasNode(fileName)) {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"destinationNode is authDocsNode. [{}]",
+								authDocsNode);
+						destinationNode = authDocsNode;
+					} else { // If the path of fileEntry is a path under 'pub'
+								// path
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"destinationNode is publicDocsNode. [{}]",
+								publicDocsNode);
+						destinationNode = publicDocsNode;
+					}
+				} catch (RepositoryException repositoryException) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"Not able to get node in the repository",
+							repositoryException);
+				}
+				// Upload documents to DAM.
+				if (currentDayOfMonth == this
+						.getBusinessDayForMoneyMarket(this.configService
+								.getMoneyMarketFundsDay())) {
+					if (fileName.startsWith(MONEY_MARKET_HLS_FUND)) {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"uploading MONEY_MARKET_HLS_FUND.");
+						uploadDocumentsToDAM(csvFilename, fileExtension,
+								fileEntry, path, destinationNode,
+								documentsFailedPublish, documentsPublished);
+						moneyMarketFilesExisting.add(fileName);
+					}
+				}
+				if (currentDayOfMonth == this.configService
+						.getAllocationFundsDay()) {
+					if (allocationFunds.contains(fileName)) {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"uploading allocationFunds.");
+						uploadDocumentsToDAM(csvFilename, fileExtension,
+								fileEntry, path, destinationNode,
+								documentsFailedPublish, documentsPublished);
+						allocationFundsFilesExisting.add(fileName);
+					}
+
+				}
+				if (currentDayOfMonth == this.configService.getHlsFundsDay()) {
+					if (hlsFunds.contains(fileName)) {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"uploading hlsFunds.");
+						uploadDocumentsToDAM(csvFilename, fileExtension,
+								fileEntry, path, destinationNode,
+								documentsFailedPublish, documentsPublished);
+						hlsFundsFilesExisting.add(fileName);
+					}
+				}
+				if (etfFunds.contains(fileName)) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"uploading etfFunds.");
+					uploadDocumentsToDAM(csvFilename, fileExtension,
+							fileEntry, path, destinationNode,
+							documentsFailedPublish, documentsPublished);
+					etfFundsFilesExisting.add(fileName);
+				}
+
+			}
+		}
+		}catch (final Exception e) {
+			LoggerUtil
+			.errorLog(
+					FullHoldingsMigrationProcess.class,
+					"\n\n\n Exception in public uploadFullHoldingsDocuments method [{}]",
+					e);
+			e.printStackTrace();
+		}
+
+	}
+
+	/**
+	 * Gets the allocation and Retail fund list.
+	 * 
+	 * @param jcrSession
+	 *            the jcr session
+	 * @param allocationFunds
+	 *            the allocation funds
+	 * @param hlsFunds
+	 *            the hls funds
+	 * @param etfFunds 
+	 * @return the fund list
+	 */
+	private void getFundList(final Session jcrSession,
+			List<String> allocationFunds, List<String> hlsFunds, List<String> etfFunds) {
+		try{
+
+		LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+				"inside getFundList() with : allocationFunds: ["
+						+ allocationFunds + "] \n\n and \n\n " + "hlsFunds: ["
+						+ hlsFunds + "]" + "etfFunds: ["
+						+ etfFunds + "]");
+		InputStream is = null;
+
+		try {
+			is = jcrSession.getNode(CSV_FILE_PATH).getProperty(JCR_DATA)
+					.getValue().getBinary().getStream();
+		} catch (ValueFormatException valueFormatException) {
+			LoggerUtil
+					.errorLog(
+							FullHoldingsMigrationProcess.class,
+							"ValueFormatException: Not able to find csv file in proper format",
+							valueFormatException);
+		} catch (PathNotFoundException pathNotFoundException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+					"PathNotFoundException: Not able to find csv file",
+					pathNotFoundException);
+		} catch (RepositoryException repositoryException) {
+			LoggerUtil
+					.errorLog(
+							FullHoldingsMigrationProcess.class,
+							"RepositoryException: Not able to find csv file in repository",
+							repositoryException);
+		} catch (Exception e) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+					"Exception in getFundList(): {}", e);
+		}
+
+		InputStreamReader inputStreamReader = getInputStreamReader(is);
+		List<Map<String, Object>> csvRowsList = CSVUtil
+				.readMigrationMatrix(inputStreamReader);
+
+		if (null != csvRowsList && !csvRowsList.isEmpty()) {
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"csvRowsList is neither null nor empty");
+			// Populate funds from csv
+			for (final Map<String, Object> rowDataMap : csvRowsList) {
+
+				if (StringUtils.isNotEmpty((String) rowDataMap
+						.get(COLUMN_HLS_FUNDS))) {
+					hlsFunds.add((String) rowDataMap.get(COLUMN_HLS_FUNDS));
+
+				}
+				if (StringUtils.isNotEmpty((String) rowDataMap
+						.get(COLUMN_ALLOCATION_FUNDS))) {
+					allocationFunds.add((String) rowDataMap
+							.get(COLUMN_ALLOCATION_FUNDS));
+				}
+				if (StringUtils.isNotEmpty((String) rowDataMap
+						.get(COLUMN_ETF_FUNDS))) {
+					etfFunds.add((String) rowDataMap
+							.get(COLUMN_ETF_FUNDS));
+				}
+			}
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"Now, the value of allocationFunds: [" + allocationFunds
+							+ "] \n\n " + "hlsFunds: [" + hlsFunds
+							+ "]  \n\n and \n\n" + "etfFunds :["+ etfFunds + "] ");
+
+		} else {
+			LoggerUtil
+					.debugLog(FullHoldingsMigrationProcess.class, "csvRowsList is null or empty");
+		}
+
+		LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Exiting getFundList()");
+		}catch (final Exception e) {
+			LoggerUtil
+			.errorLog(
+					FullHoldingsMigrationProcess.class,
+					"\n\n\n Exception in getFundList method [{}]",
+					e);
+			e.printStackTrace();
+		}
+	}
+
+	/**
+	 * Gets the input stream reader.
+	 * 
+	 * @param is
+	 *            the is
+	 * @return the input stream reader
+	 */
+	private InputStreamReader getInputStreamReader(InputStream is) {
+		return new InputStreamReader(is);
+	}
+
+	/**
+	 * Gets the file stream.
+	 * 
+	 * @param fileEntry
+	 *            the file entry
+	 * @return the file stream
+	 * @throws FileNotFoundException
+	 *             the file not found exception
+	 */
+	private FileInputStream getFileStream(final File fileEntry)
+			throws FileNotFoundException {
+		return new FileInputStream(fileEntry);
+	}
+
+	/**
+	 * Upload documents to dam.
+	 * 
+	 * @param csvFilename
+	 *            the csv filename
+	 * @param fileExtension
+	 *            the file extension
+	 * @param fileEntry
+	 *            the file entry
+	 * @param path
+	 *            the path
+	 * @param destinationNode
+	 *            the destination node
+	 */
+	private void uploadDocumentsToDAM(final String csvFilename,
+			String fileExtension, final File fileEntry, String path,
+			Node destinationNode, List<String> documentsFailedPublish,
+			List<String> documentsPublished) {
+		LoggerUtil.debugLog(
+				FullHoldingsMigrationProcess.class,
+				"Inside uploadDocumentsToDAM() with: \n " + "csvFilename: ["
+						+ csvFilename + "] \n" + "fileExtension: ["
+						+ fileExtension + "] \n" + "fileEntry: ["
+						+ fileEntry.getName() + "] \n" + "path: [" + path
+						+ "] \n" + "destinationNode: [" + destinationNode
+						+ "] \n" + "documentsFailedPublish: ["
+						+ documentsFailedPublish + "] \n"
+						+ "documentsPublished: [" + documentsPublished + "]");
+		try {
+			if (destinationNode.hasNode(path)) {
+				LoggerUtil
+						.debugLog(
+								FullHoldingsMigrationProcess.class,
+								"uploadDocumentsToDAM() : The File : {} is already uploaded at : {}",
+								fileEntry.getName(), path);
+				Asset uploadedAsset = null;
+				// Map<String, Object> existingAssetMetaDataMap = null;
+				try {
+					final String binaryPath = DamUtil
+							.assetToBinaryPath(destinationNode.getPath()
+									+ PropertyConstants.SLASH.getValue() + path);
+					LoggerUtil
+							.debugLog(
+									FullHoldingsMigrationProcess.class,
+									"uploadDocumentsToDAM() : value of binaryPath : {}",
+									binaryPath);
+					
+					// Get metadata fo existing document
+					// existingAssetMetaDataMap = asset.getMetadata();
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"uploadDocumentsToDAM() : creating asset");
+					uploadedAsset = this.assetManager
+							.createAsset(
+									destinationNode.getPath()
+											+ PropertyConstants.SLASH
+													.getValue() + path,
+									this.getFileStream(fileEntry),
+									fileExtension, true);
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"uploadDocumentsToDAM() : asset created");
+					// [140:100],[48:48],[319:319],[66:74:true]
+
+					// AssetHandler handler =
+					// getAssetHandler(uploadedAsset.getMimeType());
+					// String[] arr =
+					// {"[140:100]","[48:48]","[319:319]","[66:74:true]"};
+					// ThumbnailGenerator.parseConfig("[140:100],[48:48],[319:319],[66:74:true]");
+					// handler.createThumbnails(uploadedAsset,
+					// ThumbnailGenerator.parseConfig(arr));
+				} catch (FileNotFoundException fileNotFoundException) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"FileNotFoundException: ", fileNotFoundException);
+				} catch (Exception e) {
+					LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+							"Exception caught while creating asset : {}", e);
+				}
+				// catch (IOException ioException) {
+				// LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "IOException: ",
+				// ioException);
+				// }
+				if (null != uploadedAsset) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"uploadedAsset is not null");
+					final Node uploadedAssetNode = uploadedAsset
+							.adaptTo(Node.class);
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"uploadedAsset is not null. [{}]",
+							uploadedAssetNode);
+
+					try {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"Trying to replicate");
+						this.replicationService.replicate(
+								uploadedAssetNode.getSession(),
+								ReplicationActionType.ACTIVATE,
+								uploadedAssetNode.getPath());
+						documentsPublished.add(uploadedAssetNode.getPath());
+					} catch (ReplicationException replicationException) {
+						LoggerUtil
+								.errorLog(
+										FullHoldingsMigrationProcess.class,
+										"ReplicationException while activating the payload {}",
+										replicationException);
+						documentsFailedPublish.add(uploadedAssetNode.getPath());
+					} catch (Exception e) {
+						LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+								"Exception while activating the payload {}", e);
+						documentsFailedPublish.add(uploadedAssetNode.getPath());
+					}
+
+					/*
+					 * // configuration via the admin console - Config //
+					 * Service) LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "Reading csv rows"); this.csvRowsList =
+					 * CSVUtil.readMigrationMatrix(this.config
+					 * .getConfigurationServiceVO().getLocalDir() +
+					 * PropertyConstants.SLASH.getValue() + csvFilename);
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Csv rows read");
+					 * int counter = 0; if (null != this.csvRowsList &&
+					 * !this.csvRowsList.isEmpty()) {
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "csvRowsList is not empty"); // process each row for
+					 * (final Map<String, Object> rowDataMap : this.csvRowsList)
+					 * { // String docFileName = //
+					 * (String)rowDataMap.get(COLUMN_DOC_FILENAME); // look up
+					 * the CSV file for the name of // uploaded PDF if
+					 * (StringUtils.isNotEmpty((String)
+					 * rowDataMap.get(COLUMN_DOC_FILENAME)) && ((String)
+					 * rowDataMap
+					 * .get(COLUMN_DOC_FILENAME)).equalsIgnoreCase(uploadedAsset
+					 * .getName())) { LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "The file [{}] found in csv file at row number : [{}] ",
+					 * rowDataMap.get(COLUMN_DOC_FILENAME), this.rowCounter); if
+					 * (null != uploadedAssetNode &&
+					 * uploadedAssetNode.hasNode(JCR_CONTENT_NODE+
+					 * PropertyConstants.SLASH.getValue()+ METADATA_NODE)) {
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "Metadata node exists [{}]", JCR_CONTENT_NODE+
+					 * PropertyConstants.SLASH.getValue()+ METADATA_NODE); Node
+					 * uploadedAssetMetaDataNode = uploadedAssetNode
+					 * .getNode(JCR_CONTENT_NODE+
+					 * PropertyConstants.SLASH.getValue()+ METADATA_NODE); final
+					 * Map<String, Object> uploadedAssetMetaDataMap =
+					 * uploadedAsset.getMetadata(); if (null !=
+					 * uploadedAssetMetaDataMap &&
+					 * !uploadedAssetMetaDataMap.isEmpty()) { counter++;
+					 * 
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "calling uploadExistingAssetMetadata() to Set metadata properties for existing assets"
+					 * ); // Set metadata properties for existing assets
+					 * //uploadExistingAssetMetadata(uploadedAssetNode,
+					 * uploadedAssetMetaDataMap);
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "returned from uploadExistingAssetMetadata()");
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "calling uploadDocumentMetaData() to Set metadata properties from csv file"
+					 * ); // Set metadata properties from csv file
+					 * //this.uploadDocumentMetaData(rowDataMap,
+					 * uploadedAssetMetaDataNode);
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "returned from uploadDocumentMetaData()");
+					 * 
+					 * 
+					 * if(!documentsFailedPublish.contains(
+					 * uploadedAssetNode.getName())){ documentsPublished
+					 * .add(uploadedAssetNode.getName()); }
+					 * 
+					 * } else { LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "uploadedAssetMetaDataMap is null or empty: {}",
+					 * uploadedAssetMetaDataMap); } //this.jcrSession.save();
+					 * try { LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "Trying to replicate");
+					 * this.replicationService.replicate(
+					 * uploadedAssetNode.getSession(),
+					 * ReplicationActionType.ACTIVATE,
+					 * uploadedAssetNode.getPath());
+					 * documentsPublished.add(uploadedAssetNode.getName()); }
+					 * catch (ReplicationException replicationException) {
+					 * LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+					 * "ReplicationException while activating the payload {}",
+					 * replicationException);
+					 * documentsFailedPublish.add(uploadedAssetNode.getName());
+					 * } catch (Exception e) {
+					 * LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+					 * "Exception while activating the payload {}", e);
+					 * documentsFailedPublish.add(uploadedAssetNode.getName());
+					 * } } LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Breaking up");
+					 * break; } }
+					 * 
+					 * }
+					 * 
+					 * if (counter == 0 && existingAssetMetaDataMap != null &&
+					 * !existingAssetMetaDataMap.isEmpty()) { counter++;
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "Calling uploadExistingAssetMetadata()");
+					 * uploadExistingAssetMetadata(uploadedAssetNode,
+					 * existingAssetMetaDataMap); try {
+					 * LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "Gonna replicate 2"); this.replicationService.replicate(
+					 * uploadedAssetNode.getSession(),
+					 * ReplicationActionType.ACTIVATE,
+					 * uploadedAssetNode.getPath()); } catch
+					 * (ReplicationException replicationException) {
+					 * LoggerUtil.errorLog(ContentPublishProcess.class,
+					 * "Exception while activating the payload",
+					 * replicationException);
+					 * documentsFailedPublish.add(uploadedAssetNode.getName());
+					 * } if
+					 * (!documentsFailedPublish.contains(uploadedAssetNode.getName
+					 * ())) { LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					 * "Adding file to documentsPublished list: [{}]",
+					 * documentsPublished);
+					 * documentsPublished.add(uploadedAssetNode.getName()); } }
+					 */
+				}
+			}
+
+			// If document does not exists, extract its metadata from
+			// csv file
+			else {
+				LoggerUtil
+						.debugLog(FullHoldingsMigrationProcess.class, "document does not exists");
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"gonna read csvRowsList from CSVUtil");
+				this.csvRowsList = CSVUtil.readMigrationMatrix(this.config
+						.getConfigurationServiceVO().getLocalDir()
+						+ PropertyConstants.SLASH.getValue() + csvFilename);
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"already read csvRowsList from CSVUtil");
+				if (null != this.csvRowsList && !this.csvRowsList.isEmpty()) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"csvRowsList is not empty");
+					this.rowCounter = 0;
+					// process each row
+					for (final Map<String, Object> rowDataMap : this.csvRowsList) {
+
+						this.rowCounter++;
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"Value fo rowCounter: {}", rowCounter);
+						// String docFileName = (String)
+						// rowDataMap.get(COLUMN_DOC_FILENAME);
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"compare file name --- " + fileEntry.getName()
+										+ rowDataMap.get(COLUMN_DOC_FILENAME));
+
+						if (StringUtils.isNotEmpty((String) rowDataMap
+								.get(COLUMN_DOC_FILENAME))
+								&& ((String) rowDataMap
+										.get(COLUMN_DOC_FILENAME))
+										.equalsIgnoreCase(fileEntry.getName())) {
+							LoggerUtil
+									.debugLog(
+											FullHoldingsMigrationProcess.class,
+											"The file {} found in csv file at row number : {} ",
+											rowDataMap.get(COLUMN_DOC_FILENAME),
+											this.rowCounter);
+							/*
+							 * upload the document upload its metadata as per
+							 * CSV details.
+							 */
+							// upload the file
+							if (this.isValidRow(rowDataMap, this.rowCounter)) {
+								LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+										"Processing row # {} ",
+										this.rowCounter.toString());
+								Asset uploadedNewAsset = this.assetManager
+										.createAsset(
+												destinationNode.getPath()
+														+ PropertyConstants.SLASH
+																.getValue()
+														+ path,
+												this.getFileStream(fileEntry),
+												fileExtension, true);
+								final Node uploadedAssetNode = uploadedNewAsset
+										.adaptTo(Node.class);
+								// upload the document file
+								if (null != uploadedAssetNode
+										&& uploadedAssetNode
+												.hasNode(JCR_CONTENT_NODE
+														+ PropertyConstants.SLASH
+																.getValue()
+														+ METADATA_NODE)) {
+									Node uploadedAssetMetaDataNode = uploadedAssetNode
+											.getNode(JCR_CONTENT_NODE
+													+ PropertyConstants.SLASH
+															.getValue()
+													+ METADATA_NODE);
+									this.uploadDocumentMetaData(rowDataMap,
+											uploadedAssetMetaDataNode);
+								}
+								try {
+									this.replicationService.replicate(
+											uploadedAssetNode.getSession(),
+											ReplicationActionType.ACTIVATE,
+											uploadedAssetNode.getPath());
+								} catch (ReplicationException replicationException) {
+									LoggerUtil
+											.errorLog(
+													ContentPublishProcess.class,
+													"Exception while activating the payload",
+													replicationException);
+									documentsFailedPublish
+											.add(uploadedAssetNode.getName());
+								}
+								if (!documentsFailedPublish
+										.contains(uploadedAssetNode.getName())) {
+									documentsPublished.add(uploadedAssetNode
+											.getName());
+								}
+
+							} else {
+								LoggerUtil
+										.debugLog(
+												FullHoldingsMigrationProcess.class,
+												" Inside uploadDocuments() *********** Skipping at row # {} ",
+												this.rowCounter);
+							}
+							break;
+						}
+					}
+				}
+			}
+		} catch (AccessDeniedException accessDeniedException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "AccessDeniedException: {}",
+					accessDeniedException);
+		} catch (PathNotFoundException pathNotFoundException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "PathNotFoundException: {} ",
+					pathNotFoundException);
+		} catch (ItemExistsException itemExistsException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "ItemExistsException: {} ",
+					itemExistsException);
+		} catch (ReferentialIntegrityException referentialIntegrityException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+					"ReferentialIntegrityException: {}",
+					referentialIntegrityException);
+		} catch (ConstraintViolationException constraintViolationException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+					"ConstraintViolationException: {}",
+					constraintViolationException);
+		} catch (InvalidItemStateException invalidItemStateException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+					"InvalidItemStateException: {}", invalidItemStateException);
+		} catch (VersionException versionException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "VersionException: {}",
+					versionException);
+		} catch (LockException lockException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "LockException: {}",
+					lockException);
+		} catch (NoSuchNodeTypeException noSuchNodeTypeException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "NoSuchNodeTypeException: {}",
+					noSuchNodeTypeException);
+		} catch (FileNotFoundException fileNotFoundException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "FileNotFoundException: {}",
+					fileNotFoundException);
+		} catch (RepositoryException repositoryException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "RepositoryException: {}",
+					repositoryException);
+		} catch (final Exception e) {
+			LoggerUtil
+			.errorLog(
+					FullHoldingsMigrationProcess.class,
+					"\n\n\n Exception in the uploadDocumentsToDAM method [{}]",
+					e);
+			e.printStackTrace();
+		}
+
+	}
+
+
+	/**
+	 * Gets the current day of month.
+	 * 
+	 * @return the current day of month
+	 */
+	private int getCurrentDayOfMonth() {
+		Calendar cal = Calendar.getInstance();
+		int dayOfMonth = cal.get(Calendar.DAY_OF_MONTH);
+		// String dayOfMonthStr = String.valueOf(dayOfMonth);
+		return dayOfMonth;
+	}
+
+	/**
+	 * Upload document meta data for Dam.
+	 * 
+	 * @param rowDataMap
+	 *            the row data map
+	 * @param uploadedAssetMetaDataNode
+	 *            the uploaded asset meta data node
+	 * @return true, if successful
+	 */
+	public boolean uploadDocumentMetaData(final Map<String, Object> rowDataMap,
+			final Node uploadedAssetMetaDataNode) {
+		LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+				"Inside uploadDocumentMetaData() with : \n\n"
+						+ "uploadedAssetMetaDataNode: ["
+						+ uploadedAssetMetaDataNode + "] \n\n " + "and \n\n"
+						+ "rowDataMap: [" + rowDataMap + "]");
+		final boolean metaDataStatus = false;
+		final List<String> tagsList = new ArrayList<String>();
+		final Pattern mmddyyyyPattern = Pattern.compile(MMDDYYYY_PATTERN);
+		Matcher dateMatcherMMDDYYYY = null;
+		final String[] title = new String[1];
+		String viewInValues = StringUtils.EMPTY;
+		String[] viewInArray = new String[2];
+		String inventoryType = StringUtils.EMPTY;
+		final Calendar dateCalanderValue = Calendar.getInstance();
+		SimpleDateFormat sdfMMDDYYYY = new SimpleDateFormat(MMDDYYYY_FORMAT);
+		String documentUUID = null;
+		String isFeatured = StringUtils.EMPTY;
+
+		try {
+
+			// LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+			// "Setting metadata for document:  {} " + (String)
+			// rowDataMap.get(COLUMN_DOC_FILENAME));
+
+			documentUUID = UUIDUtil.getRandomUUID();
+
+			if (StringUtils.isNotEmpty(documentUUID)) {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting documentUUID [{}] to dc:uuid", documentUUID);
+				JcrUtil.setProperty(uploadedAssetMetaDataNode, "dc:uuid",
+						documentUUID, true);
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "dc:uuid not set !");
+			}
+
+			// Setting the Document Title
+			if (StringUtils.isNotEmpty((String) rowDataMap.get(COLUMN_TITLE))) {
+				title[0] = StringUtils.trim((String) rowDataMap
+						.get(COLUMN_TITLE));
+				// Add Document Title - Mandatory Field
+				if (uploadedAssetMetaDataNode.hasProperty(DC_TITLE)
+						&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+								DC_TITLE).isMultiple()) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting title1 [{}] to dc:title", title[0]);
+					// Added Document Title
+					JcrUtil.setProperty(uploadedAssetMetaDataNode, DC_TITLE,
+							title, true);
+				} else if (!uploadedAssetMetaDataNode.hasProperty(DC_TITLE)) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting title2 [{}] to dc:title", title[0]);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode, DC_TITLE,
+							title, true);
+				} else {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting title3 [{}] to dc:title", title[0]);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode, DC_TITLE,
+							StringUtils.trim((String) rowDataMap
+									.get(COLUMN_TITLE)), true);
+				}
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Title not set !!!!!!!");
+			}
+
+			// Set the Description
+			if (null != rowDataMap.get(DESCRIPTION)
+					&& StringUtils.isNotEmpty((String) rowDataMap
+							.get(DESCRIPTION))) {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting DESCRIPTION [{}] to dc:description",
+						DESCRIPTION);
+				this.setStringProperty(rowDataMap, uploadedAssetMetaDataNode,
+						DESCRIPTION, "dc:description");
+
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Description not set !!!!!!!");
+			}
+			// Add isFeatured - Ensure that the value is Yes or No in the column
+			isFeatured = STRING_NO;
+			if (null != rowDataMap.get("Document/Asset Featured - Yes/No")) {
+				isFeatured = (String) rowDataMap
+						.get("Document/Asset Featured - Yes/No");
+				if (StringUtils.isNotEmpty(isFeatured)) {
+					if (StringUtils.equalsIgnoreCase(isFeatured, VALUE_YES)
+							|| StringUtils.equalsIgnoreCase(isFeatured,
+									STRING_Y)) {
+						isFeatured = VALUE_YES;
+					} else {
+						isFeatured = STRING_NO;
+					}
+				} else {
+					isFeatured = STRING_NO;
+				}
+			}
+			if (uploadedAssetMetaDataNode.hasProperty("isfeatured")
+					&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+							"isfeatured").isMultiple()) {
+				final String featured[] = new String[1];
+				featured[0] = isFeatured;
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting isfeatured1 [{}] to isfeatured", featured[0]);
+				JcrUtil.setProperty(uploadedAssetMetaDataNode, "isfeatured",
+						featured, true);
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting isfeatured2 [{}] to isfeatured", isFeatured);
+				JcrUtil.setProperty(uploadedAssetMetaDataNode, "isfeatured",
+						isFeatured, true);
+			}
+
+			// Add Authentication Required - Yes/No
+			String authRequiredValue = StringUtils.EMPTY;
+			if (null != rowDataMap.get(AUTHENTICATION_REQUIRED_YES_NO)) {
+				authRequiredValue = (String) rowDataMap
+						.get(AUTHENTICATION_REQUIRED_YES_NO);
+				if (authRequiredValue.equalsIgnoreCase(VALUE_YES)) {
+					// only if a Yes is there in column value
+					if (uploadedAssetMetaDataNode
+							.hasProperty("dc:authenticationrequired")
+							&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+									"dc:authenticationrequired").isMultiple()) {
+						final String authenticationRequired[] = new String[1];
+						authenticationRequired[0] = CHECKBOX_PROPERTY_ON_VAL;
+						LoggerUtil
+								.debugLog(
+										FullHoldingsMigrationProcess.class,
+										"Setting authenticationRequired1 [{}] to dc:authenticationrequired",
+										authenticationRequired[0]);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"dc:authenticationrequired",
+								authenticationRequired, true);
+					} else {
+						LoggerUtil
+								.debugLog(
+										FullHoldingsMigrationProcess.class,
+										"Setting authenticationRequired2 [{}] to dc:authenticationrequired",
+										CHECKBOX_PROPERTY_ON_VAL);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"dc:authenticationrequired",
+								CHECKBOX_PROPERTY_ON_VAL, true);
+					}
+
+				} else if (authRequiredValue.equalsIgnoreCase(VALUE_NO)
+						&& uploadedAssetMetaDataNode
+								.hasProperty("dc:authenticationrequired")) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"removing property dc:authenticationrequired");
+					uploadedAssetMetaDataNode.getProperty(
+							"dc:authenticationrequired").remove();
+				}
+
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Authentication Required not set !!!!!!!");
+			}
+
+			LoggerUtil
+					.debugLog(
+							FullHoldingsMigrationProcess.class,
+							"Setting triggeremailprintupdate [{}] to triggeremailprintupdate",
+							CHECKBOX_PROPERTY_ON_VAL);
+			// Wave 1.5 | Trigger mail update property
+			JcrUtil.setProperty(uploadedAssetMetaDataNode,
+					"triggeremailprintupdate", CHECKBOX_PROPERTY_ON_VAL, true);
+
+			// Add tags applicable to the Document - Funds, Firms, Audience,
+			// Role
+			this.getDocumentTags(rowDataMap, tagsList);
+			if (!tagsList.isEmpty()) { // at least one tag was fetched and
+										// should be populated in
+										// cq:tags
+										// property
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting cq:tags [{}] to cq:tags", tagsList);
+				JcrUtil.setProperty(uploadedAssetMetaDataNode, "cq:tags",
+						tagsList.toArray(), true);
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "No Tag was set !!!!!!!");
+			}
+
+			// Add Available for Email - Yes/No
+			String availableForEmail = StringUtils.EMPTY;
+			if (null != rowDataMap.get("Available for Email - Yes/No")) {
+				availableForEmail = (String) rowDataMap
+						.get("Available for Email - Yes/No");
+				if (availableForEmail.equalsIgnoreCase(VALUE_YES)) { // set
+					// the
+					// value
+					// only
+					// if a
+					// Yes is
+					// there in column value
+					if (uploadedAssetMetaDataNode
+							.hasProperty("dc:availableforemail")
+							&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+									"dc:availableforemail").isMultiple()) {
+						final String availableForEmailArray[] = new String[1];
+						availableForEmailArray[0] = CHECKBOX_PROPERTY_ON_VAL;
+						LoggerUtil
+								.debugLog(
+										FullHoldingsMigrationProcess.class,
+										"Setting dc:availableforemail1 [{}] to dc:availableforemail",
+										CHECKBOX_PROPERTY_ON_VAL);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"dc:availableforemail", availableForEmailArray,
+								true);
+					} else {
+						LoggerUtil
+								.debugLog(
+										FullHoldingsMigrationProcess.class,
+										"Setting dc:availableforemail2 [{}] to dc:availableforemail",
+										CHECKBOX_PROPERTY_ON_VAL);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"dc:availableforemail",
+								CHECKBOX_PROPERTY_ON_VAL, true);
+					}
+
+				} else if (availableForEmail.equalsIgnoreCase(VALUE_NO)
+						&& uploadedAssetMetaDataNode
+								.hasProperty("dc:availableforemail")) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Removing property dc:availableforemail");
+					uploadedAssetMetaDataNode.getProperty(
+							"dc:availableforemail").remove();
+				} else {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"The value for availableForEmail is: {} ",
+							availableForEmail);
+				}
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Available for Email  not set !!!!!!!");
+			}
+
+			// Add Available for Order - Yes/No
+			String availableForOrder = StringUtils.EMPTY;
+			String maxcopiesavail = StringUtils.EMPTY;
+			if (null != rowDataMap.get("Available for Order - Yes/No")) {
+				availableForOrder = (String) rowDataMap
+						.get("Available for Order - Yes/No");
+				if (availableForOrder.equalsIgnoreCase(VALUE_YES)
+						|| availableForOrder.equalsIgnoreCase(STRING_Y)) { // set
+					// the
+					// value
+					// only is
+					// a Yes
+					// if
+					// there
+					// in
+					// column
+					// value
+					if (uploadedAssetMetaDataNode
+							.hasProperty("dc:availablefororder")
+							&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+									"dc:availablefororder").isMultiple()) {
+						final String availableForOrderArray[] = new String[1];
+						availableForOrderArray[0] = CHECKBOX_PROPERTY_ON_VAL;
+						LoggerUtil
+								.debugLog(
+										FullHoldingsMigrationProcess.class,
+										"Setting dc:availablefororder1 [{}] to dc:availablefororder",
+										CHECKBOX_PROPERTY_ON_VAL);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"dc:availablefororder", availableForOrderArray,
+								true);
+					} else {
+						LoggerUtil
+								.debugLog(
+										FullHoldingsMigrationProcess.class,
+										"Setting dc:availablefororder2 [{}] to dc:availablefororder",
+										CHECKBOX_PROPERTY_ON_VAL);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"dc:availablefororder",
+								CHECKBOX_PROPERTY_ON_VAL, true);
+					}
+
+					if (null != rowDataMap.get(MAX_COPIES_AVAILABLE_FOR_ORDER)) {
+						maxcopiesavail = (String) rowDataMap
+								.get(MAX_COPIES_AVAILABLE_FOR_ORDER);
+						if (StringUtils.isNotEmpty(maxcopiesavail)) {
+							LoggerUtil
+									.debugLog(
+											FullHoldingsMigrationProcess.class,
+											"Setting dc:maxcopiesavail [{}] to dc:maxcopiesavail",
+											MAX_COPIES_AVAILABLE_FOR_ORDER);
+							this.setStringProperty(rowDataMap,
+									uploadedAssetMetaDataNode,
+									MAX_COPIES_AVAILABLE_FOR_ORDER,
+									"dc:maxcopiesavail");
+
+						} else {
+							LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+									"MAX COPIES AVAILABLE IS BLANK !!");
+						}
+					} else {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"MAX COPIES AVAILABLE!!");
+					}
+				} else if ((availableForOrder.equalsIgnoreCase(VALUE_NO) || availableForOrder
+						.equalsIgnoreCase(STRING_N))
+						&& uploadedAssetMetaDataNode
+								.hasProperty("dc:availablefororder")) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"removing property dc:availablefororder");
+					uploadedAssetMetaDataNode.getProperty(
+							"dc:availablefororder").remove();
+					if (uploadedAssetMetaDataNode
+							.hasProperty("dc:maxcopiesavail")) {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"removing property dc:maxcopiesavail");
+						uploadedAssetMetaDataNode.getProperty(
+								"dc:maxcopiesavail").remove();
+					}
+				}
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Available for Order  not set !!!!!!!");
+			}
+
+			if (null != rowDataMap.get(UPDATE_FREQUENCY)
+					&& StringUtils.isNotEmpty((String) rowDataMap
+							.get(UPDATE_FREQUENCY))) {
+				// Add Update Frequency
+				if (uploadedAssetMetaDataNode.hasProperty("updateFrequency")
+						&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+								"updateFrequency").isMultiple()) {
+					final String updateFrequencyArray[] = new String[1];
+					updateFrequencyArray[0] = StringUtils
+							.lowerCase((String) rowDataMap
+									.get(UPDATE_FREQUENCY));
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting value1 [{}]  to property updateFrequency",
+							updateFrequencyArray[0]);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode,
+							"updateFrequency", updateFrequencyArray, true);
+				} else {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting value2 [{}]  to property updateFrequency",
+							(String) rowDataMap.get(UPDATE_FREQUENCY));
+					JcrUtil.setProperty(uploadedAssetMetaDataNode,
+							"updateFrequency", StringUtils
+									.lowerCase((String) rowDataMap
+											.get(UPDATE_FREQUENCY)), true);
+				}
+
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Update Frequency not set !!!!!!!");
+			}
+
+			if (null != rowDataMap.get(COLUMN_PIECECODE)
+					&& StringUtils.isNotEmpty((String) rowDataMap
+							.get(COLUMN_PIECECODE))) {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting value [{}]  to property piececode",
+						COLUMN_PIECECODE);
+				// Add Piece Code
+				this.setStringProperty(rowDataMap, uploadedAssetMetaDataNode,
+						COLUMN_PIECECODE, "piececode");
+
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Piece Code not set !!!!!!!");
+			}
+
+			if (null != rowDataMap.get(FORM_NUMBER)
+					&& StringUtils.isNotEmpty((String) rowDataMap
+							.get(FORM_NUMBER))) {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting value [{}]  to property formnumber",
+						FORM_NUMBER);
+				// Add Form Number
+				this.setStringProperty(rowDataMap, uploadedAssetMetaDataNode,
+						FORM_NUMBER, "formnumber");
+
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Form Number not set !!!!!!!");
+			}
+
+			final String strRevisonDate = (String) rowDataMap
+					.get("Revision Date");
+			Date revisonDate = null;
+			// Add Revision Date - prism:revisionDate
+			if (StringUtils.isNotEmpty(strRevisonDate)) {
+				dateMatcherMMDDYYYY = mmddyyyyPattern.matcher(strRevisonDate);
+				if (dateMatcherMMDDYYYY.find()) {
+					revisonDate = sdfMMDDYYYY.parse(strRevisonDate);
+					dateCalanderValue.setTime(revisonDate);
+				} else {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"REVISION DATE DID NOT MATCH THE EXPECTED FORMAT");
+					revisonDate = new Date(System.currentTimeMillis());
+					dateCalanderValue.setTime(revisonDate);
+				}
+			} else {
+				revisonDate = new Date(System.currentTimeMillis());
+				dateCalanderValue.setTime(revisonDate);
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"No value set for Revision Date !!!! ");
+			}
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"Setting value1 [{}]  to property prism:revisionDate",
+					dateCalanderValue);
+			JcrUtil.setProperty(uploadedAssetMetaDataNode,
+					"prism:revisionDate", dateCalanderValue, true);
+
+			String strWebExpirationDate = (String) rowDataMap
+					.get("Web Expiration Date");
+			Date webExpirationDate = null;
+			// Add Web Expiration Date - prism:expirationDate
+			// strWebExpirationDate = DISTANT_DATE;
+			if (StringUtils.isNotEmpty(strWebExpirationDate)) {
+				dateMatcherMMDDYYYY = mmddyyyyPattern
+						.matcher(strWebExpirationDate);
+				if (dateMatcherMMDDYYYY.find()) {
+					webExpirationDate = sdfMMDDYYYY.parse(strWebExpirationDate);
+					dateCalanderValue.setTime(webExpirationDate);
+				} else {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"EXPIRATION DATE DID NOT MATCH THE EXPECTED FORMAT - SO "
+									+ "SETTING IT TO A DISTANT DATE");
+					strWebExpirationDate = DISTANT_DATE;
+					webExpirationDate = sdfMMDDYYYY.parse(strWebExpirationDate);
+					dateCalanderValue.setTime(webExpirationDate);
+				}
+			} else {
+				strWebExpirationDate = DISTANT_DATE;
+				webExpirationDate = sdfMMDDYYYY.parse(strWebExpirationDate);
+				dateCalanderValue.setTime(webExpirationDate);
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Web Expiration Date Not Set !!");
+			}
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"Setting value2 [{}]  to property prism:revisionDate",
+					dateCalanderValue);
+			JcrUtil.setProperty(uploadedAssetMetaDataNode,
+					"prism:expirationDate", dateCalanderValue, true);
+
+			// Add Is Personalizable
+			String personalizable = StringUtils.EMPTY;
+			if (null != rowDataMap.get("Personalizable")) {
+				personalizable = (String) rowDataMap.get("Personalizable");
+				if (personalizable.equalsIgnoreCase(VALUE_YES)
+						|| personalizable.equalsIgnoreCase(STRING_Y)) {
+
+					if (uploadedAssetMetaDataNode
+							.hasProperty("ispersonalizable")
+							&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+									"ispersonalizable").isMultiple()) {
+						final String isPersonalizable[] = new String[1];
+						isPersonalizable[0] = CHECKBOX_PROPERTY_ON_VAL;
+						LoggerUtil
+								.debugLog(
+										FullHoldingsMigrationProcess.class,
+										"Setting value1 [{}]  to property ispersonalizable",
+										isPersonalizable[0]);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"ispersonalizable", isPersonalizable, true);
+					} else {
+						LoggerUtil
+								.debugLog(
+										FullHoldingsMigrationProcess.class,
+										"Setting value2 [{}]  to property ispersonalizable",
+										CHECKBOX_PROPERTY_ON_VAL);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"ispersonalizable", CHECKBOX_PROPERTY_ON_VAL,
+								true);
+					}
+
+				} else if ((personalizable.equalsIgnoreCase(VALUE_NO) || personalizable
+						.equalsIgnoreCase(STRING_N))
+						&& uploadedAssetMetaDataNode
+								.hasProperty("ispersonalizable")) {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Removing property ispersonalizable");
+					uploadedAssetMetaDataNode.getProperty("ispersonalizable")
+							.remove();
+				}
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Personalizable Not Set !!");
+			}
+
+			if (null != rowDataMap.get("Form Owner")) {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting value2 Form Owner  to property formowner");
+				// Add Form Owner
+				this.setStringProperty(rowDataMap, uploadedAssetMetaDataNode,
+						"Form Owner", "formowner");
+
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Form Owner Not Set !!");
+			}
+
+			if (null != rowDataMap.get("Inventory Type")) {
+				inventoryType = (String) rowDataMap.get("Inventory Type");
+				if (StringUtils.isNotEmpty(inventoryType)) {
+					if (StringUtils.contains(inventoryType, '-')
+							|| StringUtils.contains(inventoryType, '/')) {
+						// inventoryType =
+						// StringUtils.lowerCase(StringUtils.remove(inventoryType,
+						// "-"));
+						inventoryType = StringUtils
+								.deleteWhitespace(inventoryType);
+						inventoryType = StringUtils.remove(inventoryType, '-');
+						inventoryType = StringUtils.remove(inventoryType, '/');
+						inventoryType = StringUtils.lowerCase(inventoryType);
+					} else if (StringUtils.contains(inventoryType, ' ')) {
+						inventoryType = StringUtils.lowerCase(StringUtils
+								.deleteWhitespace(inventoryType));
+					} else {
+						inventoryType = StringUtils.lowerCase(inventoryType);
+					}
+				}
+				// Add Inventory Type
+				if (uploadedAssetMetaDataNode.hasProperty("inventorytype")
+						&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+								"inventorytype").isMultiple()) {
+					final String inventoryTypeArray[] = new String[1];
+					inventoryTypeArray[0] = inventoryType;
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting value1 [{}]  to property inventorytype",
+							inventoryTypeArray[0]);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode,
+							"inventorytype", inventoryTypeArray, true);
+				} else {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting value2 [{}]  to property inventorytype",
+							inventoryType);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode,
+							"inventorytype", inventoryType, true);
+				}
+
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Inventory Type Not Set !!");
+			}
+
+			if (null != rowDataMap.get("Viewability")) {
+				// Add Viewability
+				if (uploadedAssetMetaDataNode.hasProperty("viewability")
+						&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+								"viewability").isMultiple()) {
+					final String viewabilityArray[] = new String[1];
+					viewabilityArray[0] = StringUtils
+							.lowerCase((String) rowDataMap.get("Viewability"));
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting value1 [{}]  to property viewability",
+							viewabilityArray[0]);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode,
+							"viewability", viewabilityArray, true);
+				} else {
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting value2 [{}]  to property viewability",
+							(String) rowDataMap.get("Viewability"));
+					JcrUtil.setProperty(uploadedAssetMetaDataNode,
+							"viewability", StringUtils
+									.lowerCase((String) rowDataMap
+											.get("Viewability")), true);
+				}
+
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, "Viewability Not Set !!");
+			}
+
+			if (null != rowDataMap.get(KEYWORDS)
+					&& StringUtils
+							.isNotEmpty((String) rowDataMap.get(KEYWORDS))) {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting value [{}]  to property dam:keywords",
+						rowDataMap.get(KEYWORDS));
+				// Add Keywords
+				JcrUtil.setProperty(uploadedAssetMetaDataNode, "dam:keywords",
+						rowDataMap.get(KEYWORDS), true);
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"Setting value [{}]  to property keyword",
+						rowDataMap.get(KEYWORDS));
+				JcrUtil.setProperty(uploadedAssetMetaDataNode, "keyword",
+						rowDataMap.get(KEYWORDS), true);
+			} else {
+				LoggerUtil
+						.debugLog(FullHoldingsMigrationProcess.class, "Keywords not set !!!!!!!");
+			}
+
+			// Add Print Obsolete Date
+			String strPrintObsoleteDate = (String) rowDataMap
+					.get("Print Obsolete Date");
+			Date printObsoleteDate = null;
+			if (!StringUtils.isEmpty(strPrintObsoleteDate)) {
+				dateMatcherMMDDYYYY = mmddyyyyPattern
+						.matcher(strPrintObsoleteDate);
+				if (dateMatcherMMDDYYYY.find()) {
+					printObsoleteDate = sdfMMDDYYYY.parse(strPrintObsoleteDate);
+					dateCalanderValue.setTime(printObsoleteDate);
+				} else {
+					strPrintObsoleteDate = DISTANT_DATE;
+					printObsoleteDate = sdfMMDDYYYY.parse(strPrintObsoleteDate);
+					dateCalanderValue.setTime(printObsoleteDate);
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Obsolete Date DID NOT MATCH THE EXPECTED FORMAT");
+				}
+			} else { // No value was there
+				strPrintObsoleteDate = DISTANT_DATE;
+				printObsoleteDate = sdfMMDDYYYY.parse(strPrintObsoleteDate);
+				dateCalanderValue.setTime(printObsoleteDate);
+			}
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"Setting value1 [{}]  to property prism:obsoleteDate",
+					dateCalanderValue);
+			JcrUtil.setProperty(uploadedAssetMetaDataNode,
+					"prism:obsoleteDate", dateCalanderValue, true);
+
+			// Add Effective Date
+			final String strEffectiveDate = (String) rowDataMap
+					.get("Effective Date");
+			sdfMMDDYYYY = new SimpleDateFormat(MMDDYYYY_FORMAT);
+			Date effectiveDate = null;
+			if (StringUtils.isNotEmpty(strEffectiveDate)) {
+				dateMatcherMMDDYYYY = mmddyyyyPattern.matcher(strEffectiveDate);
+				if (dateMatcherMMDDYYYY.find()) {
+					effectiveDate = sdfMMDDYYYY.parse(strEffectiveDate);
+					dateCalanderValue.setTime(effectiveDate);
+				} else {
+					effectiveDate = new Date(System.currentTimeMillis());
+					dateCalanderValue.setTime(effectiveDate);
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Effective Date DID NOT MATCH THE EXPECTED FORMAT");
+				}
+			} else {
+				effectiveDate = new Date(System.currentTimeMillis());
+				dateCalanderValue.setTime(effectiveDate);
+			}
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"Setting value2 [{}]  to property prism:obsoleteDate",
+					dateCalanderValue);
+			JcrUtil.setProperty(uploadedAssetMetaDataNode,
+					"prism:effectiveDate", dateCalanderValue, true);
+
+			viewInValues = (String) rowDataMap.get("View In");
+
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					"************** View in Array has length: {} ",
+					viewInArray.length);
+			// Add View In
+			if (StringUtils.isNotEmpty(viewInValues)) {
+				viewInArray = StringUtils.split(viewInValues, ';');
+				if (viewInArray.length > 1) {
+					if (!viewInArray[0].equalsIgnoreCase("Marketing Campaigns")) {
+						// swap places
+						final StringBuffer swapStringFirst = new StringBuffer(
+								viewInArray[0]);
+						final StringBuffer swapStringSecond = new StringBuffer(
+								viewInArray[0]);
+						viewInArray[0] = swapStringSecond.toString();
+						viewInArray[1] = swapStringFirst.toString();
+					}
+					LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+							"Setting value1 [{}]  to property viewin",
+							viewInArray[0]);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode, "viewin",
+							viewInArray, true);
+				} else {
+					if (uploadedAssetMetaDataNode.hasProperty("viewin")
+							&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+									"viewin").isMultiple()) {
+						final String viewinArray[] = new String[1];
+						viewinArray[0] = viewInValues;
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"Setting value2 [{}]  to property viewin",
+								viewInArray[0]);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"viewin", viewinArray, true);
+					} else {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+								"Setting value3 [{}]  to property viewin",
+								viewInValues);
+						JcrUtil.setProperty(uploadedAssetMetaDataNode,
+								"viewin", viewInValues, true);
+					}
+
+				}
+			} else {
+				LoggerUtil
+						.debugLog(FullHoldingsMigrationProcess.class,
+								" ******************* View In not set ******************* ");
+			}
+
+			String fullfillmentPieceCode = (String) rowDataMap
+					.get("Fulfillment Piece Code");
+			if (StringUtils.isNotEmpty(fullfillmentPieceCode)) {
+				LoggerUtil
+						.debugLog(
+								FullHoldingsMigrationProcess.class,
+								"Setting value3 [{}]  to property fulfillmentpiececode",
+								fullfillmentPieceCode);
+				JcrUtil.setProperty(uploadedAssetMetaDataNode,
+						"fulfillmentpiececode", fullfillmentPieceCode, true);
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"No Fullfillment Piece Code found !!");
+				if (null != rowDataMap.get(COLUMN_PIECECODE)
+						&& StringUtils.isNotEmpty((String) rowDataMap
+								.get(COLUMN_PIECECODE))) {
+					fullfillmentPieceCode = (String) rowDataMap
+							.get(COLUMN_PIECECODE);
+					LoggerUtil
+							.debugLog(
+									FullHoldingsMigrationProcess.class,
+									"No Fullfillment Piece Code setting to the value of Piece Code: {} ",
+									fullfillmentPieceCode);
+				} else {
+					fullfillmentPieceCode = PROPERTYVALUE_NOT_FOUND_NA;
+					LoggerUtil
+							.debugLog(
+									FullHoldingsMigrationProcess.class,
+									"No Fullfillment Piece Code found and no Piece Code found as well; setting it to: {} ",
+									fullfillmentPieceCode);
+				}
+				if (uploadedAssetMetaDataNode
+						.hasProperty("fulfillmentpiececode")
+						&& JcrUtil.getProperty(uploadedAssetMetaDataNode,
+								"fulfillmentpiececode").isMultiple()) {
+					final String fulfillmentPieceCodeArray[] = new String[1];
+					fulfillmentPieceCodeArray[0] = fullfillmentPieceCode;
+					LoggerUtil
+							.debugLog(
+									FullHoldingsMigrationProcess.class,
+									"Setting value2 [{}]  to property fulfillmentpiececode",
+									fulfillmentPieceCodeArray[0]);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode,
+							"fulfillmentpiececode", fulfillmentPieceCodeArray,
+							true);
+				} else {
+					LoggerUtil
+							.debugLog(
+									FullHoldingsMigrationProcess.class,
+									"Setting value3 [{}]  to property fulfillmentpiececode",
+									fullfillmentPieceCode);
+					JcrUtil.setProperty(uploadedAssetMetaDataNode,
+							"fulfillmentpiececode", fullfillmentPieceCode, true);
+				}
+
+			}
+
+		} catch (final RepositoryException repositoryException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class, "", repositoryException);
+
+		}
+
+		catch (final ParseException parseException) {
+			LoggerUtil
+					.errorLog(
+							FullHoldingsMigrationProcess.class,
+							"parseException occured while writing metadata: message is: {} ",
+							parseException);
+		}
+		LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+				"Exiting method uploadDocumentMetaData()");
+		return metaDataStatus;
+	}
+
+	/**
+	 * Checks if is valid row.
+	 * 
+	 * @param rowDataMap
+	 *            the row data map
+	 * @param rowCounter
+	 *            the row counter
+	 * @return true, if is valid row
+	 */
+	private boolean isValidRow(final Map<String, Object> rowDataMap,
+			final Integer rowCounter) {
+
+		String fileName = StringUtils.EMPTY;
+		fileName = (String) rowDataMap.get(COLUMN_DOC_FILENAME);
+		final String isAuthorized = (String) rowDataMap
+				.get(COLUMN_AUTHENTICATION_REQUIRED_YES_NO);
+		final String description = (String) rowDataMap.get(COLUMN_DESCRIPTION);
+		// String viewIn = (String)rowDataMap.get("View In");
+		final String documentSource = (String) rowDataMap
+				.get(COLUMN_DOCUMENT_SOURCE);
+		final String documentTitle = (String) rowDataMap.get(COLUMN_TITLE);
+
+		if (StringUtils.isNotEmpty(documentSource)) { // check the source of
+
+			if (StringUtils.isBlank(fileName)) { // Check file name
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						" ******** No File  Name found at row # {} ",
+						rowCounter.toString());
+				this.rowsProcessedStatus.put(this.rowCounter,
+						"No File  Name found at row # " + rowCounter);
+				return false;
+			} // Check for rest of the mandatory fields
+			else if (StringUtils.isBlank(documentTitle)) { // check title
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, LOG_NO_VALUE,
+						COLUMN_TITLE, fileName, rowCounter.toString());
+				this.rowsProcessedStatus.put(this.rowCounter, STRING_NO_SPACE
+						+ COLUMN_TITLE + LOG_FOR + fileName + AT_ROW
+						+ rowCounter);
+				return false;
+			} else if (StringUtils.isBlank(isAuthorized)) { // Check for
+															// empty Auth
+															// Required
+															// field
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, LOG_NO_VALUE,
+						COLUMN_AUTHENTICATION_REQUIRED_YES_NO, fileName,
+						rowCounter.toString());
+				this.rowsProcessedStatus.put(this.rowCounter, STRING_NO_SPACE
+						+ COLUMN_AUTHENTICATION_REQUIRED_YES_NO + LOG_FOR
+						+ fileName + AT_ROW + rowCounter);
+				return false;
+			} else if (StringUtils.isBlank(description)) { // Check for
+															// empty
+															// description
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, LOG_NO_VALUE,
+						COLUMN_DESCRIPTION, fileName, rowCounter.toString());
+				this.rowsProcessedStatus.put(this.rowCounter, STRING_NO_SPACE
+						+ COLUMN_DESCRIPTION + LOG_FOR + fileName + AT_ROW
+						+ rowCounter);
+				return false;
+			}
+
+		} else { // Document source is blank - cannot differentiate between
+					// different
+					// documents
+			LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+					" No Document Source provided at row  # {} ",
+					rowCounter.toString());
+			this.rowsProcessedStatus.put(this.rowCounter,
+					"No Document Source provided at row # " + rowCounter);
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * Set a property String for uploaded dam asset.
+	 * 
+	 * @param rowDataMap
+	 *            the row data map
+	 * @param uploadedAssetMetaDataNode
+	 *            the uploaded asset meta data node
+	 * @param columnName
+	 *            column name in row data map
+	 * @param propertyName
+	 *            name of the property, which needs to be set
+	 * @return true, if successful
+	 * @throws RepositoryException
+	 *             the repository exception
+	 */
+	private void setStringProperty(final Map<String, Object> rowDataMap,
+			final Node uploadedAssetMetaDataNode, final String columnName,
+			final String propertyName) throws RepositoryException {
+		if (uploadedAssetMetaDataNode.hasProperty(propertyName)
+				&& JcrUtil.getProperty(uploadedAssetMetaDataNode, propertyName)
+						.isMultiple()) {
+			final String propertyArray[] = new String[1];
+			propertyArray[0] = (String) rowDataMap.get(columnName);
+			JcrUtil.setProperty(uploadedAssetMetaDataNode, propertyName,
+					propertyArray, true);
+		} else {
+			JcrUtil.setProperty(uploadedAssetMetaDataNode, propertyName,
+					rowDataMap.get(columnName), true);
+		}
+		// Add Description
+	}
+
+	/**
+	 * Gets the document tags.
+	 * 
+	 * @param rowDataMap
+	 *            the row data map
+	 * @param tagsList
+	 *            the tags list
+	 * @return the document tags
+	 */
+	public void getDocumentTags(final Map<String, Object> rowDataMap,
+			final List<String> tagsList) {
+
+		final String fundNames = (String) rowDataMap.get("Fund Name");
+		final String firmNames = (String) rowDataMap.get("Firm-Approved For");
+		final String audienceValues = (String) rowDataMap
+				.get("Audience (Client / Broker)");
+		final String documentType = (String) rowDataMap.get(DOCUMENT_TYPE);
+		final String documentTag = (String) rowDataMap.get("Tags");
+		final String roleValues = (String) rowDataMap.get("Role");
+		String[] multiTagValue = null;
+		String statement = StringUtils.EMPTY;
+
+		NodeIterator nodeIterator = null;
+		Node tagNode = null;
+		Tag tag = null;
+
+		try {
+
+			/*
+			 * add the document type tag - either a Resources: form or
+			 * literature tag
+			 */
+			statement = QUERY_SELECT + THF_TAGS_RESOURCES + QUERY_AND_TITLE;
+			if (StringUtils.isNotEmpty(documentType)
+					&& StringUtils.isNotEmpty(documentTag)) {
+				statement = statement.concat((documentType + JCR_TITLE_OR
+						+ documentType.concat(STRING_S) + "'" + JCR_TITLE_OR
+						+ documentTag + "'" + JCR_TITLE_OR
+						+ documentTag.concat(STRING_S) + STRING_CLOSING_BRACE));
+			} else if (StringUtils.isNotEmpty(documentType)) {
+				statement = statement
+						.concat((documentType + JCR_TITLE_OR
+								+ documentType.concat(STRING_S) + STRING_CLOSING_BRACE));
+
+			}
+			nodeIterator = SearchUtil.findNodes(this.jcrSession, statement,
+					SearchUtil.SQL2);
+			if (nodeIterator != null && nodeIterator.getSize() > 0) {
+				while (nodeIterator.hasNext()) {
+					tagNode = nodeIterator.nextNode();
+					tag = this.tagManager.resolve(tagNode.getPath());
+					if (null != tag) {
+						tagsList.add(tag.getTagID());
+					}
+				}
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"IMPORTANT: No Tag Discovered for {} ", documentType);
+			}
+
+			/* add the funds tag */
+
+			if (StringUtils.isNotEmpty(fundNames)) {
+				if (StringUtils.equalsIgnoreCase(fundNames, ALL)) { // case of
+					// all /
+					// ALL
+					// value
+					statement = QUERY_SELECT + THF_TAGS_FUNDS + STRING_BRACES;
+
+					nodeIterator = SearchUtil.findNodes(this.jcrSession,
+							statement, SearchUtil.SQL2);
+					if (nodeIterator != null && nodeIterator.getSize() > 0) {
+						while (nodeIterator.hasNext()) {
+							tagNode = nodeIterator.nextNode();
+							tag = this.tagManager.resolve(tagNode.getPath());
+							if (null != tag) {
+								tagsList.add(tag.getTagID());
+							}
+						}
+					} else {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, LOG_NO_TAG,
+								fundNames);
+					}
+				} else { // one or more fund tags are available
+					statement = QUERY_SELECT + THF_TAGS_FUNDS + QUERY_AND_TITLE;
+					multiTagValue = fundNames.split(STRING_SEMI_COLON);
+					final char[] fundTagDelimeters = { '-', ' ' };
+					if (multiTagValue.length > 0) {
+						for (String tagValue : multiTagValue) {
+							tagValue = WordUtils.capitalize(tagValue,
+									fundTagDelimeters);
+							statement = statement.concat((StringUtils
+									.trim(tagValue))
+									+ JCR_TITLE_OR
+									+ (StringUtils.trim(tagValue))
+									+ JCR_TITLE_OR
+									+ StringUtils.trim(tagValue)
+									+ STRING_CLOSING_BRACE);
+							LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+									"The statement for Fund Names is: ",
+									statement);
+							nodeIterator = SearchUtil
+									.findNodes(this.jcrSession, statement,
+											SearchUtil.SQL2);
+							if (nodeIterator != null
+									&& nodeIterator.getSize() > 0) {
+								while (nodeIterator.hasNext()) {
+									tagNode = nodeIterator.nextNode();
+									tag = this.tagManager.resolve(tagNode
+											.getPath());
+									if (null != tag) {
+										tagsList.add(tag.getTagID());
+									}
+								}
+							} else {
+								LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+										LOG_NO_TAG, tagValue);
+							}
+							statement = QUERY_SELECT + THF_TAGS_FUNDS
+									+ QUERY_AND_TITLE;
+						}
+					}
+				}
+			} else {
+				LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+						"NO FUND TAG TAGGED FOR THE DOCUMENT ");
+			}
+
+			// Query to Search for the Firms' Tags and and add them to the
+			// tagList
+			statement = QUERY_SELECT + THF_TAGS_FIRM + QUERY_AND_TITLE;
+			if (StringUtils.isNotEmpty(firmNames)) {
+				multiTagValue = firmNames.split(STRING_SEMI_COLON);
+				if (multiTagValue.length > 0) {
+					for (final String tagValue : multiTagValue) {
+						statement = statement.concat(StringUtils.trim(tagValue)
+								+ STRING_CLOSING_BRACE);
+						nodeIterator = SearchUtil.findNodes(this.jcrSession,
+								statement, SearchUtil.SQL2);
+						if (nodeIterator != null && nodeIterator.getSize() > 0) {
+							while (nodeIterator.hasNext()) {
+								tagNode = nodeIterator.nextNode();
+								tag = this.tagManager
+										.resolve(tagNode.getPath());
+								if (null != tag) {
+									tagsList.add(tag.getTagID());
+								}
+							}
+						} else {
+							LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+									"No Tag Discovered for Firms {} ",
+									firmNames);
+						}
+					}
+					statement = QUERY_SELECT + THF_TAGS_FIRM + QUERY_AND_TITLE;
+				}
+			}
+
+			// Add Tags for Roles
+			statement = QUERY_SELECT + THF_TAGS_ROLE + QUERY_AND_TITLE;
+			if (StringUtils.isNotEmpty(roleValues)) {
+				if (StringUtils.isBlank(roleValues)
+						|| StringUtils.equalsIgnoreCase(roleValues.trim(), ALL)) { // blank
+					// value in
+					// role
+					// column or
+					// ALL
+					// or all
+					// value
+					statement = QUERY_SELECT + THF_TAGS_ROLE + STRING_BRACES;
+					nodeIterator = SearchUtil.findNodes(this.jcrSession,
+							statement, SearchUtil.SQL2);
+					if (nodeIterator != null && nodeIterator.getSize() > 0) {
+						while (nodeIterator.hasNext()) {
+							tagNode = nodeIterator.nextNode();
+							tag = this.tagManager.resolve(tagNode.getPath());
+							if (null != tag) {
+								tagsList.add(tag.getTagID());
+							}
+						}
+					} else {
+						LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, LOG_NO_TAG,
+								roleValues);
+					}
+				} else {
+					multiTagValue = roleValues.split(STRING_SEMI_COLON);
+					if (multiTagValue.length > 0) {
+						for (final String tagValue : multiTagValue) {
+							statement = statement.concat(StringUtils
+									.trim(tagValue) + STRING_CLOSING_BRACE);
+							nodeIterator = SearchUtil
+									.findNodes(this.jcrSession, statement,
+											SearchUtil.SQL2);
+							if (nodeIterator != null
+									&& nodeIterator.getSize() > 0) {
+								while (nodeIterator.hasNext()) {
+									tagNode = nodeIterator.nextNode();
+									tag = this.tagManager.resolve(tagNode
+											.getPath());
+									if (null != tag) {
+										tagsList.add(tag.getTagID());
+									}
+								}
+							} else {
+								LoggerUtil.debugLog(FullHoldingsMigrationProcess.class,
+										LOG_NO_TAG, tagValue);
+							}
+							statement = QUERY_SELECT + THF_TAGS_ROLE
+									+ QUERY_AND_TITLE;
+						}
+					}
+				}
+			} else { // set the roles to be All
+				statement = QUERY_SELECT + THF_TAGS_ROLE + STRING_BRACES;
+				nodeIterator = SearchUtil.findNodes(this.jcrSession, statement,
+						SearchUtil.SQL2);
+				if (nodeIterator != null && nodeIterator.getSize() > 0) {
+					while (nodeIterator.hasNext()) {
+						tagNode = nodeIterator.nextNode();
+						tag = this.tagManager.resolve(tagNode.getPath());
+						if (null != tag) {
+							tagsList.add(tag.getTagID());
+						}
+					}
+				} else {
+					LoggerUtil
+							.debugLog(FullHoldingsMigrationProcess.class, LOG_NO_TAG, roleValues);
+				}
+			}
+
+			// Query to Search for the AUDIENCES' Tags and and them to the
+			// tagList
+			statement = QUERY_SELECT + THF_TAGS_AUDIENCE + QUERY_AND_TITLE;
+			if (StringUtils.isNotEmpty(audienceValues)) {
+				multiTagValue = audienceValues.split(STRING_SEMI_COLON);
+				if (multiTagValue.length > 0) {
+					for (final String tagValue : multiTagValue) {
+						statement = statement.concat(StringUtils.trim(tagValue)
+								+ STRING_CLOSING_BRACE);
+						nodeIterator = SearchUtil.findNodes(this.jcrSession,
+								statement, SearchUtil.SQL2);
+						if (nodeIterator != null && nodeIterator.getSize() > 0) {
+							while (nodeIterator.hasNext()) {
+								tagNode = nodeIterator.nextNode();
+								tag = this.tagManager
+										.resolve(tagNode.getPath());
+								if (null != tag) {
+									tagsList.add(tag.getTagID()); // add the
+																	// Firm Tag
+								}
+							}
+						} else {
+							LoggerUtil.debugLog(FullHoldingsMigrationProcess.class, LOG_NO_TAG,
+									audienceValues);
+						}
+					}
+					statement = QUERY_SELECT + THF_TAGS_AUDIENCE
+							+ QUERY_AND_TITLE;
+				}
+			}
+		} catch (final RepositoryException repositoryException) {
+			LoggerUtil.errorLog(FullHoldingsMigrationProcess.class,
+					"RepositoryException occured while setting MetaData : {} ",
+					repositoryException);
+		}
+	}
+
+	/**
+	 * Gets the business day for money market.
+	 * 
+	 * @param day
+	 *            the day
+	 * @return the business day for money market
+	 */
+	int getBusinessDayForMoneyMarket(int day) {
+		Calendar cal = new GregorianCalendar();
+		cal.set(Calendar.DAY_OF_MONTH, day);
+		if (cal.get(Calendar.DAY_OF_WEEK) == Calendar.SATURDAY) {
+			cal.add(Calendar.DATE, 2);
+		} else if (cal.get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY) {
+			cal.add(Calendar.DATE, 1);
+		}
+		return cal.get(Calendar.DAY_OF_MONTH);
+	}
+
+	private void sendGenericFailureMail(String message) {
+		LoggerUtil
+				.errorLog(FullHoldingsMigrationProcess.class,
+						"FullHoldingsMigrationProcess : Inside sendGenericFailureMail()");
+		String table = null;
+
+		table = "<table>";
+		table = table + "<tr><td>Full Holdings Migration Process failed ["
+				+ new Date() + "] </td></tr>";
+		table = table + "<tr><td> [" + message + "] </td></tr>";
+		table = table + "</table>";
+		Map<String, Object> mailProperties = new HashMap<String, Object>();
+		mailProperties.put("subject", "Full Holdings Migration Process failed");
+
+		mailProperties.put("salutation",
+				MailUtils.getServerInformation(configService) + "<br/><br/>");
+		mailProperties.put("table", table);
+		String[] contactEmail = configService.getAdminEmailId();
+		MailUtils.sendMail(contactEmail, mailProperties, genericMailService);
+		LoggerUtil
+				.errorLog(FullHoldingsMigrationProcess.class,
+						"FullHoldingsMigrationProcess : Exiting sendGenericFailureMail()");
+	}
+
+}
+---------------------------------------------------------------------------------------------------------------------------
+
+SynthesisWorkflowService.java
+
+/*********************************************************************
+ * Copyright (c) 2015, Hartford Funds, Radnor, 19087, USA
+ * All rights reserved.
+ * This software is the confidential and proprietary information of
+ * Hartford Funds ("Confidential Information").
+ * You shall not disclose such Confidential Information and shall
+ * use it only in accordance with the terms of the license agreement
+ * you entered into with Hartford Funds.
+ *********************************************************************/
+
+package com.thehartford.thf.workflows;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import javax.jcr.LoginException;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.jcr.SimpleCredentials;
+import javax.xml.bind.JAXBException;
+
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.ReferencePolicy;
+import org.apache.felix.scr.annotations.Service;
+import org.apache.sling.jcr.api.SlingRepository;
+import org.osgi.service.component.ComponentContext;
+
+import com.day.cq.workflow.WorkflowSession;
+import com.thehartford.thf.core.common.service.CQConfigurationService;
+import com.thehartford.thf.core.common.vo.ConfigurationServiceVO;
+import com.thehartford.thf.core.configmanagement.ConfigService;
+import com.thehartford.thf.core.exception.ApplicationRuntimeException;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.mail.GenericMailConfiguration;
+import com.thehartford.thf.core.mail.GenericMailService;
+import com.thehartford.thf.core.mail.impl.MailConstants;
+import com.thehartford.thf.integration.common.context.RequestContext;
+import com.thehartford.thf.integration.common.exception.FileIOException;
+import com.thehartford.thf.integration.common.exception.InitializationException;
+import com.thehartford.thf.integration.common.exception.PersistenceException;
+import com.thehartford.thf.integration.fileprocessor.FileProcessorManager;
+import com.thehartford.thf.integration.fileprocessor.helper.FileHandler;
+import com.thehartford.thf.integration.fileprocessor.util.FileUtil;
+import com.thehartford.thf.integration.filevalidator.FileValidationException;
+import com.thehartford.thf.integration.ftp.constant.FileReaderType;
+import com.thehartford.thf.integration.ftp.service.AbstractFileReader;
+import com.thehartford.thf.integration.ftp.service.FileReaderFactory;
+import com.thehartford.thf.integration.persistence.factory.PersistentObjectFactory;
+
+
+
+/**
+ * SynthesisWorkflowService is a service deployed as OSgi bundle. This class
+ * gets
+ * invoked by CQ Synthesis Workflow at specific time, that can be configured via
+ * OSgi console. It
+ * fetches configuration parameters from
+ * <code>GenericSchedulerConfiguration</code>.
+ * 
+ * @author vgaut3,sjai38
+ */
+@Service({ SynthesisWorkflowService.class })
+@Component(label = "THF Synthesis Workflow Service",
+        description = "Used for processing the synthesis XMLs in CQ Crxde")
+public class SynthesisWorkflowService {
+    /**
+     * Object of SlingRepository injected.
+     */
+    @Reference(policy = ReferencePolicy.STATIC)
+    protected SlingRepository repository;
+    
+   
+    /**
+     * JCR session object.
+     */
+    private Session session;
+
+    /** The configuration service vo. */
+    public ConfigurationServiceVO configurationServiceVO = null;
+
+    /** The Constant SEMI_COLLON. */
+    protected static final String SEMI_COLLON = ";";
+    
+    /** The paths map. */
+    private Map<String, Object> fundNameMap;
+    
+    static List<String> fileValidationFailureList = new ArrayList<String>();
+
+	/**
+     * Retry interval. Configuration property.
+     */
+    @Property(label = "Retry Interval",
+            description = "Retry Interval (in minutues)", value = "15")
+    public static final String RETRY_INTERVAL = "retry.interval";
+
+    /** The CQ common config service. */
+    @Reference
+    public CQConfigurationService cqConfigurationService;
+    
+    /** The config service. */
+    @Reference
+    private ConfigService configService;
+      
+    
+   /** GenericMailService Service reference. */
+    @Reference
+    private GenericMailService mailService;
+    
+ private final static String   MONTHLY_FILE_VALIDATION_LIST = "/data/syn_file/xmlfeeds/monthly/";
+    
+    private final  static String DAILY_FILE_VALIDATION_LIST = "/data/syn_file/xmlfeeds/daily/";
+    
+    /**
+     * This method invokes FTP downloading service from SFTPFileReader class. It
+     * gets download status as String value.
+     * 
+     * @param type
+     *            the type
+     * @param session
+     *            the session
+     * @param host
+     *            the host
+     * @param port
+     *            the port
+     * @param user
+     *            the user
+     * @param password
+     *            the password
+     * @param remoteDir
+     *            the remote dir
+     * @param localDir
+     *            the local dir
+     * @param filePatternString
+     *            the file pattern string
+     * @return status object of String
+     */
+    public String invokeFTPService(final String type,
+            final WorkflowSession session, final String host, final int port,
+            final String user, final String password, final String remoteDir,
+            final String localDir, final String filePatternString) {
+
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "inside FTPService .");
+        AbstractFileReader fileReader = FileReaderFactory
+                .getReader(FileReaderType.SFTP);
+        String status = fileReader.process(type, session, host, port, user,
+                password, remoteDir, localDir, filePatternString);
+        LoggerUtil
+                .infoLog(SynthesisWorkflowService.class, "FTPService ends...");
+        return status;
+    }
+
+    /**
+     * This method invokes file processing method from FileProcessorManager. iI
+     * gets HashMap as return value which contains JAXB obejcts as value.
+     * 
+     * @param filePath
+     *            the file path
+     * @param fileName
+     *            the file name
+     * @param datafileType
+     *            the datafile type
+     * @param mappingLocation
+     *            the mapping location
+     * @return object of HashMap<String, Object>
+     * @throws FileValidationException
+     *             the file validation exception
+     * @throws ApplicationRuntimeException
+     *             the application runtime exception
+     * @throws InitializationException
+     *             the initialization exception
+     */
+    public Map<String, Object> invokeFileProcessor(final String filePath,
+            final String fileName, final String datafileType,
+            final String mappingLocation, String fundsToBeProcessed) throws FileValidationException,
+            ApplicationRuntimeException, InitializationException {
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "inside invokeFileProcessor method() .");
+        Map<String, Object> objectMap = null;
+        RequestContext context = RequestContext
+                .buildRequestContext(this.session);
+
+        FileProcessorManager fileProcessorManager = new FileProcessorManager(
+                new FileHandler());
+        try {
+
+            objectMap = fileProcessorManager.process(context, filePath,
+                    fileName, datafileType, mappingLocation,fundsToBeProcessed);
+        } catch (ApplicationRuntimeException applicationRuntimeException) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "GeneralRunTimeException at Schedule task ::",
+                    applicationRuntimeException);
+        } catch (FileIOException fileIOException) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "FileIOException at Schedule task ::", fileIOException);
+        } catch (JAXBException jAXBException) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "JAXBException at Schedule task ::", jAXBException);
+        } catch (PersistenceException persistenceException) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "CRXPersistenceException at Schedule task ::",
+                    persistenceException);
+        } catch (RepositoryException repositoryException) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "RepositoryException at Schedule task ::",
+                    repositoryException);
+        }
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "exit invokeFileProcessor method() .");
+        return objectMap;
+    }
+
+    /**
+     * Processes multiple XML files and invokes CRX data importer service to
+     * persist the
+     * XML data in CRX.
+     * 
+     * @param filePath
+     *            String
+     * @param fileName
+     * 
+     *            String
+     * @param dataFileType
+     *            String
+     * @param mappingFileLocation
+     *            String
+     * @return Map<String, Object>
+     * @throws FileValidationException
+     *             the file validation exception
+     * @throws InitializationException
+     *             the initialization exception
+     * @throws LoginException
+     *             the login exception
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    protected Map<String, Object> processFiles(final String filePath,
+            final String fileName, final String dataFileType,
+            final String mappingFileLocation, String fundsToBeProcessed) throws FileValidationException,
+            InitializationException, LoginException, RepositoryException {
+    	
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "inside processFiles() .");
+        Map<String, Object> objectMap = null;
+        ArrayList<String> fileBeingProceesed = new ArrayList<String>();
+        this.fundNameMap = new HashMap<String, Object>();
+        String[] fileNameArr = fileName
+                .split(SynthesisWorkflowService.SEMI_COLLON);
+        String[] dataFileTypeArr = dataFileType
+                .split(SynthesisWorkflowService.SEMI_COLLON);
+        String[] mappingFileLocationArr = mappingFileLocation
+                .split(SynthesisWorkflowService.SEMI_COLLON);
+        
+       
+        
+        LoggerUtil.debugLog(this.getClass(),
+                "Synthesis Workflow  : inside processfiles() : handleFileValidation() : "
+                        + "fileValidationFailureList3 :"
+                        + SynthesisWorkflowService.getFileValidationFailureList()); 
+        
+        if (null != fileNameArr && null != dataFileTypeArr
+                && null != mappingFileLocationArr && fileNameArr.length > 0
+                && dataFileTypeArr.length > 0
+                && mappingFileLocationArr.length > 0) {
+            // check whether number of files to be processed have datafiletype
+            // property set or not
+            if (fileNameArr.length == dataFileTypeArr.length
+                    && fileNameArr.length == mappingFileLocationArr.length) {
+                int count = 0;
+                Map<String, Object> mailProperties = new HashMap<String, Object>();
+                /**
+        		* Author: Anurag Kumar
+        		* Date: 22 September 2013
+        		* Dirty code starts
+        		* send email saying which files are going to be processed by Synthesis WF
+        		*/
+                /**
+        		* Author: Abhishek Mishra
+        		* Date: 26 Dec 2014
+        		* Blank email issue fix        		
+        		*/
+                
+                
+                
+                if (null!=fileNameArr && fileNameArr.length>0)
+                {
+                String table1 = "<table border='1'>";
+                for (String file : fileNameArr) {
+                	
+				
+				
+	     LoggerUtil.debugLog(this.getClass(),
+		                "Synthesis Workflow  : inside processfiles() : filePath() : "
+		                        + "filePath :"
+		                        + filePath); 
+				
+                    String fileFullPath = filePath + File.separator + file;
+                    
+                    
+                   
+                    LoggerUtil.debugLog(this.getClass(),
+    		                "Synthesis Workflow  : inside processfiles() : fileFullPath() : "
+    		                        + "fileFullPath :"
+    		                        + fileFullPath);
+                    
+					boolean isFileAvailable = FileUtil.isFileAvailable(fileFullPath);
+					
+                    LoggerUtil.debugLog(SynthesisWorkflowService.class,"isFileAvailable ." + isFileAvailable);
+                    
+					if(isFileAvailable){
+						
+                    	
+						if(SynthesisWorkflowService.getFileValidationFailureList().contains(file)) {               		 
+                			continue;            		
+                	         }
+                    		fileBeingProceesed.add(file);
+                    	
+                    	table1 = table1 + "<tr><td>"+file+"</td></tr>"; 
+                    	
+                    	 LoggerUtil.debugLog(this.getClass(),
+         		                "Synthesis Workflow  : inside processfiles() : file() : "
+         		                        + "file :"
+         		                        + file);
+                    }
+                    
+                }
+               String table = table1 + "</table>";                
+               
+        		        		
+        		LoggerUtil.infoLog(SynthesisWorkflowService.class, "Value of table is ["+table1+"]");
+        		mailProperties.put("subject", "Synthesis Workflow started");
+                if(null!=fundsToBeProcessed)
+                {
+    				mailProperties.put("salutation", "This alert has been generated from <a href='"+this.configService.getOnsiteAuthorBaseUrl()+"'>"
+    						+this.configService.getOnsiteAuthorBaseUrl()+"</a><br/><br/>" +
+    						"The workflow has been started in filtered mode and following funds will be processed:"+"<br/>" +
+    						fundsToBeProcessed + "<br/>" + 
+    						"The following files are being processed by Synthesis Workflow");                	
+                }
+                else
+                {
+                	mailProperties.put("salutation", "This alert has been generated from <a href='"+this.configService.getOnsiteAuthorBaseUrl()+"'>"
+						+this.configService.getOnsiteAuthorBaseUrl()+"</a><br/><br/>" + "The workflow has been started in normal mode." + "<br/>" +
+						"The following files are being processed by Synthesis Workflow");
+                }
+                
+                if(!fileValidationFailureList.isEmpty())
+                	
+                {
+                	
+                	String table2 = "<table border='1'>";
+    	    		table2+="<tr><td></td></tr>";
+    	    		table2 += "<tr><td>List of file or files for which validation failed:</td></tr>";
+    	    		
+    	    		table2 += "<tr><td>"+fileValidationFailureList+"</td></tr>";
+    	    		table2 = table2 + "</table>";
+    	    		table = table1+"</br>"+table2;
+                	
+                }
+                
+                
+                
+				mailProperties.put("table", table);
+				String contactEmail[] = null;
+				contactEmail = this.configService.getSynthesisEmailAlertReceiver();
+				GenericMailConfiguration mailConfig = this.mailService.getGenericMailConfiguration(MailConstants.INTERNAL_GENERIC_EMAIL);
+				if(fileBeingProceesed!=null && fileBeingProceesed.size()>0)
+				mailConfig.sendMail("/etc/notification/email/thf/genericmessage", contactEmail, mailProperties);
+        		
+        		LoggerUtil.infoLog(SynthesisWorkflowService.class, "email sent+++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                }
+                else
+                {
+                	String table = "<table border='1'>";
+                	table = table + "There is no file available on SFTP server.";
+                	table = table + "</table>";
+                	mailProperties.put("salutation", "This alert has been generated from <a href='"+this.configService.getOnsiteAuthorBaseUrl()+"'>"
+						+this.configService.getOnsiteAuthorBaseUrl()+"</a><br/><br/>");
+                	mailProperties.put("table", table);
+    				String contactEmail[] = null;
+    				contactEmail = this.configService.getSynthesisEmailAlertReceiver();
+    				GenericMailConfiguration mailConfig = this.mailService.getGenericMailConfiguration(MailConstants.INTERNAL_GENERIC_EMAIL);
+    				mailConfig.sendMail("/etc/notification/email/thf/genericmessage", contactEmail, mailProperties);
+                	LoggerUtil.infoLog(SynthesisWorkflowService.class, "File list was empty so no email sent");
+                }
+        		/**
+				* Dirty code ends
+				*/
+                
+                // Iterate through file name array and get corresponding
+                // datafiletype and xsd file
+                // value from corresponding array and validate and process it
+                for (String file : fileNameArr) {                	
+                	
+                
+                	
+                    String dataFileType_ = dataFileTypeArr[count];
+                    
+                    LoggerUtil.debugLog(this.getClass(),
+    		                "Synthesis Workflow after mail sent   : inside processfiles() : dataFileType_() : "
+    		                        + "dataFileType_ :"
+    		                        + dataFileType_);
+                    String xsdLocation = mappingFileLocationArr[count];
+                    LoggerUtil.debugLog(this.getClass(),
+    		                "Synthesis Workflow after mail sent   : inside processfiles() : xsdLocation() : "
+    		                        + "xsdLocation :"
+    		                        + xsdLocation);
+                    String xsdName = xsdLocation.substring(
+                            xsdLocation.lastIndexOf("/") + 1,
+                            xsdLocation.indexOf(".xsd"));
+                    
+                    LoggerUtil.debugLog(this.getClass(),
+    		                "Synthesis Workflow after mail sent   : inside processfiles() : xsdName() : "
+    		                        + "xsdName :"
+    		                        + xsdName);
+                     
+                    count++;
+                    
+                    LoggerUtil.debugLog(this.getClass(),
+    		                "Synthesis Workflow after mail sent   : inside processfiles() : filePath() : "
+    		                        + "filePath :"
+    		                        + filePath);
+                    
+                    String fileFullPath = filePath + File.separator + file;
+                    
+                    LoggerUtil.debugLog(this.getClass(),
+    		                "Synthesis Workflow after mail sent   : inside processfiles() : fileFullPath() : "
+    		                        + "fileFullPath :"
+    		                        + fileFullPath);
+                    
+                    boolean isFileAvailable = FileUtil.isFileAvailable(fileFullPath);
+                    if (isFileAvailable) {
+                    try {
+                    	if(SynthesisWorkflowService.getFileValidationFailureList().contains(file)) {               		 
+                			continue;            		
+                	        }
+
+                        // Create JCR session
+                        this.session = this.repository.login(this
+                                .createSimpleCredentials());
+                        LoggerUtil
+                                .infoLog(SynthesisWorkflowService.class,
+                                        "repository session has created while validating the xml() .");
+
+                        // validate the filename and datafiletype and XSD name
+                        if (this.validateFile(file, dataFileType_, xsdName)) {
+                            LoggerUtil
+                                    .infoLog(SynthesisWorkflowService.class,
+                                            "Fila validation is successfull::::::::::: .");
+                            objectMap = this.invokeFileProcessor(this.session,
+                                    filePath, file, dataFileType_, xsdLocation,fundsToBeProcessed);
+                        } else {
+                            LoggerUtil.infoLog(this.getClass(),
+                                    "XML file name : " + file
+                                            + ", Data file type : "
+                                            + dataFileType_
+                                            + ", and XSd name : " + xsdName
+                                            + " doesn't match");
+                        }
+                        // CRX Persistence Service Impl begin
+                        Object jaxbObj = objectMap.get(dataFileType_);
+                        PersistentObjectFactory.createPersistentObject(jaxbObj);
+
+                        // Get the List of PortfolidIds of processed funds
+                        List<String> portfolioNames = PersistentObjectFactory
+                                .getPortfolioNames();
+                        if (null != portfolioNames && portfolioNames.size() > 0) {
+                            // I
+                            
+                            objectMap.put("portfolioNames", portfolioNames);
+                            LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                                    "portfolioNames.size() :: "
+                                            + portfolioNames.size());
+                            for (String portfolioName : portfolioNames) {
+                                
+                                this.fundNameMap.put(portfolioName, portfolioName);
+                                LoggerUtil.infoLog(
+                                        SynthesisWorkflowService.class,
+                                        "Portfolio name :: " + portfolioName);
+                            }
+                        } else {
+                            LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                                    "Portfolio name is null");
+                        }
+                        
+                        objectMap.put("portfolioAllNames", this.fundNameMap);
+						objectMap.put("fileBeingProceesed", fileBeingProceesed);
+                    } finally {
+                        if (null != this.session && this.session.isLive()) {
+                            LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                                    "Finnaly Block executed for SynthesisWorkflowService "
+                                            + this.session);
+                            this.session.logout();
+                        }
+                    }
+                }
+                }
+            }
+        }
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "exit processFiles()::::::::::: .");
+        
+        return objectMap;
+    }
+
+    /**
+     * Validates the name of the file, type of the file and XSD name whether
+     * these are same or not.
+     * 
+     * @param fileName
+     *            the file name
+     * @param dataFileType_
+     *            the data file type_
+     * @param xsdName
+     *            the xsd name
+     * @return true, if successful
+     */
+    private boolean validateFile(final String fileName,
+            final String dataFileType_, final String xsdName) {
+        boolean flag = false;
+        if (!"".equals(fileName) && !"".equals(dataFileType_)) {
+        	LoggerUtil.debugLog(this.getClass(),
+	                "Synthesis Workflow after mail sent   : inside validateFile() : fileName() : "
+	                        + "fileName :"
+	                        + fileName);
+        	LoggerUtil.debugLog(this.getClass(),
+	                "Synthesis Workflow after mail sent   : inside validateFile() : dataFileType_() : "
+	                        + "dataFileType_ :"
+	                        + dataFileType_);
+        	
+            if (fileName.contains(".xml")) {
+            	
+                String file = fileName.substring(0, fileName.indexOf(".xml"));
+                
+                LoggerUtil.debugLog(this.getClass(),
+    	                "Synthesis Workflow after mail sent   : inside validateFile() : file() : "
+    	                        + "file :"
+    	                        + file);
+                
+                if (file.equals(dataFileType_) && file.equals(xsdName)
+                        && dataFileType_.equals(xsdName)) {
+                    flag = true;
+                }
+            }
+        }
+        return flag;
+    }
+
+    /**
+     * This method invokes file processing method from FileProcessorManager. iI
+     * gets HashMap as return value which contains JAXB obejcts as value.
+     * 
+     * @param session
+     *            the session
+     * @param filePath
+     *            the file path
+     * @param fileName
+     *            the file name
+     * @param datafileType
+     *            the datafile type
+     * @param mappingLocation
+     *            the mapping location
+     * @return object of HashMap<String, Object>
+     * @throws FileValidationException
+     *             the file validation exception
+     * @throws InitializationException
+     *             the initialization exception
+     */
+    protected Map<String, Object> invokeFileProcessor(final Session session,
+            final String filePath, final String fileName,
+            final String datafileType, final String mappingLocation, String fundsToBeProcessed)
+            throws FileValidationException, InitializationException {
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "inside invokeFileProcessor()::::::::::: .");
+        Map<String, Object> objectMap = null;
+        RequestContext context = RequestContext.buildRequestContext(session);
+        FileProcessorManager fileProcessorManager = new FileProcessorManager(
+                new FileHandler());
+        try {
+            objectMap = fileProcessorManager.process(context, filePath,
+                    fileName, datafileType, mappingLocation,fundsToBeProcessed);
+        } catch (ApplicationRuntimeException applicationRuntimeException) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "GeneralRunTimeException at Schedule task :: "
+                            + applicationRuntimeException.getMessage(),
+                    applicationRuntimeException);
+        } catch (FileIOException fileIOException) {
+            LoggerUtil.errorLog(
+                    this.getClass(),
+                    "FileIOException at Schedule task :: "
+                            + fileIOException.getMessage(), fileIOException);
+        } catch (JAXBException jAXBException) {
+            LoggerUtil.errorLog(
+                    this.getClass(),
+                    "JAXBException at Schedule task :: "
+                            + jAXBException.getMessage(), jAXBException);
+        } catch (PersistenceException persistenceException) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "CRXPersistenceException at Schedule task :: "
+                            + persistenceException.getMessage(),
+                    persistenceException);
+        } catch (RepositoryException repositoryException) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "RepositoryException at Schedule task :: "
+                            + repositoryException.getMessage(),
+                    repositoryException);
+        }
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "exit invokeFileProcessor()::::::::::: .");
+        return objectMap;
+    }
+
+    /**
+     * Life cycle method of Java scheduler. This method automatically gets
+     * invoked whenever scheduler runs.
+     * 
+     * @param componentContext
+     *            Object of ComponentContext, gets passed from OSGi service
+     */
+    protected void activate(final ComponentContext componentContext) {
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "Entering activate for SynthesisWorkflowService");
+        try {
+            if (null != this.repository
+                    && null != this.createSimpleCredentials()) {
+                this.session = this.repository.login(this
+                        .createSimpleCredentials());
+                this.setSession(this.session);
+            }
+        } catch (LoginException loginException) {
+            LoggerUtil.errorLog(SynthesisWorkflowService.class,
+                    "Entering activate for SynthesisWorkflowService"
+                            + loginException.getMessage(), loginException);
+        } catch (RepositoryException repositoryException) {
+            LoggerUtil.errorLog(SynthesisWorkflowService.class,
+                    "Entering activate for SynthesisWorkflowService"
+                            + repositoryException.getMessage(),
+                    repositoryException);
+        }
+
+    }
+
+    /**
+     * Life cycle method of Java scheduler. This method automatically gets
+     * invoked whenever scheduler runs.
+     * 
+     * @param context
+     *            the context
+     */
+    protected void deactivate(final ComponentContext context) {
+
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "Entering activate for SynthesisWorkflowService");
+
+    }
+
+    /**
+     * Gets the repository.
+     * 
+     * @return the repository
+     */
+    public SlingRepository getRepository() {
+        return this.repository;
+    }
+
+    /**
+     * Sets the repository.
+     * 
+     * @param repository
+     *            the new repository
+     */
+    public void setRepository(final SlingRepository repository) {
+        this.repository = repository;
+    }
+
+    /**
+     * Gets the session.
+     * 
+     * @return the session
+     */
+    public Session getSession() {
+        return this.session;
+    }
+
+    /**
+     * Sets the session.
+     * 
+     * @param session
+     *            the new session
+     */
+    public void setSession(final Session session) {
+        this.session = session;
+    }
+
+    /**
+     * Creates SimpleCredentials object.
+     * 
+     * @return SimpleCredentials
+     */
+    protected SimpleCredentials createSimpleCredentials() {
+        LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                "inside createSimpleCredentials");
+        if (null != this.cqConfigurationService) {
+            LoggerUtil.infoLog(SynthesisWorkflowService.class,
+                    "Inside createSimpleCredentials() :: cqConfigurationService username : "
+                            + this.cqConfigurationService.getUserName());
+            return new SimpleCredentials(
+                    this.cqConfigurationService.getUserName(),
+                    this.cqConfigurationService.getPassword().toCharArray());
+        } else {
+            return null;
+        }
+
+    }
+
+    
+    public  static List<String> getFileValidationFailureList() {
+		return fileValidationFailureList;
+	}
+
+	public  static void setFileValidationFailureList(String file) {
+		
+		if(file.contains("monthly")){
+			fileValidationFailureList.add(file.replace(MONTHLY_FILE_VALIDATION_LIST, ""));
+		}
+		else if (file.contains("daily")){
+			fileValidationFailureList.add(file.replace(DAILY_FILE_VALIDATION_LIST, ""));
+		}
+		 
+	}
+
+}
+---------------------------------------------------------------------------------------------------------------
+sftpfileReader.java
+
+
+package com.thehartford.thf.integration.ftp.service.impl;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.SocketException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+import javax.jcr.Node;
+import javax.jcr.PathNotFoundException;
+import javax.jcr.RepositoryException;
+
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.net.ftp.FTP;
+import org.apache.commons.net.ftp.FTPClient;
+import org.apache.commons.net.ftp.FTPReply;
+import org.apache.commons.vfs.AllFileSelector;
+import org.apache.commons.vfs.FileObject;
+import org.apache.commons.vfs.FileSystem;
+import org.apache.commons.vfs.FileSystemException;
+import org.apache.commons.vfs.FileSystemManager;
+import org.apache.commons.vfs.FileSystemOptions;
+import org.apache.commons.vfs.FileType;
+import org.apache.commons.vfs.Selectors;
+import org.apache.commons.vfs.UserAuthenticator;
+import org.apache.commons.vfs.VFS;
+import org.apache.commons.vfs.auth.StaticUserAuthenticator;
+import org.apache.commons.vfs.impl.DefaultFileSystemConfigBuilder;
+import org.apache.commons.vfs.provider.local.LocalFile;
+import org.apache.commons.vfs.provider.sftp.SftpFileSystemConfigBuilder;
+import org.apache.jackrabbit.JcrConstants;
+import org.apache.log4j.Logger;
+
+import com.day.cq.workflow.WorkflowSession;
+import com.thehartford.thf.core.exception.ApplicationRuntimeException;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.integration.ftp.constant.FTPConstants;
+import com.thehartford.thf.integration.ftp.exception.FTPConnectionException;
+import com.thehartford.thf.integration.ftp.exception.FTPIOException;
+import com.thehartford.thf.integration.ftp.exception.FTPInitException;
+import com.thehartford.thf.integration.ftp.service.AbstractFileReader;
+
+
+/**
+ * this class is subclass of AbstractFileReader and implements all abstract
+ * method with respect to SFTP.
+ *
+ * @author dpand1
+ */
+public class SFTPFileReader extends AbstractFileReader {
+
+    /** The Constant WITH_EXCEPTION. */
+    private static final String WITH_EXCEPTION = " with exception :";
+
+    /** The Constant SFTP_CONNECTION_SUCCESSFULLY_ESTABLISHED_TO. */
+    private static final String SFTP_CONNECTION_SUCCESSFULLY_ESTABLISHED_TO = "SFTP "
+            + "connection successfully established to :";
+
+    /** The Constant SFTP_ERROR_PARSING_PATH. */
+    private static final String SFTP_ERROR_PARSING_PATH = "SFTP error parsing path ";
+
+    /** The Constant COLON. */
+    private static final String COLON = ":";
+
+    /** The Constant FILEPATTERN. */
+    private static final String FILEPATTERN = "FILEPATTERN";
+
+    /** The Constant LOCALDIR_KEY. */
+    private static final String LOCALDIR_KEY = "LOCALDIR";
+
+    /** The Constant REMOTEDIR_KEY. */
+    private static final String REMOTEDIR_KEY = "REMOTEDIR";
+
+    /** The Constant PORT_KEY. */
+    private static final String PORT_KEY = "PORT";
+
+    /** The Constant STRING_HOST. */
+    private static final String STRING_HOST = "HOST";
+
+    /** The Constant LOCAL_DIR. */
+    private static final String LOCAL_DIR = " localDir :";
+
+    /** The Constant FILE_PATTERN_STRING. */
+    private static final String FILE_PATTERN_STRING = " filePatternString :";
+
+    /** The Constant REMOTE_DIR. */
+    private static final String REMOTE_DIR = " remoteDir :";
+
+    /** The Constant STRING_PORT. */
+    private static final String STRING_PORT = " port :";
+
+    /** The Constant DOWNLOAD_CALLED_WITH_HOST. */
+    private static final String DOWNLOAD_CALLED_WITH_HOST = "download called with host : ";
+
+    /** The local url prefix. */
+    private String localURLPrefix = null;
+
+    /** The remote url prefix. */
+    private String remoteURLPrefix = null;
+
+    /** The fs manager. */
+    private FileSystemManager fsManager = null;
+
+    /** The opts. */
+    private FileSystemOptions opts = null;
+
+    /** The sftp file. */
+    private FileObject sftpFile;
+
+    /** The src. */
+    private FileObject src = null; // used for cleanup in release()
+
+    /** The summary map. */
+    private Map<String, String> summaryMap = null;
+
+    /** The processed list. */
+    private List<String> processedList = null;
+
+    /** The ignored list. */
+    private List<String> ignoredList = null;
+
+    /** The Constant LOGGER. */
+    private static final Logger LOGGER = Logger.getLogger(SFTPFileReader.class);
+
+    /*
+     * Initialized data summaryMap,processedList ,ignoredList and fsManager
+     * (non-Javadoc)
+     * @see
+     * com.thehartford.thf.integration.ftp.service.AbstractFileReader#init()
+     */
+    @Override
+    protected final void init() throws FTPInitException {
+        LoggerUtil.infoLog(this.getClass(),
+                "SFTPFileReader init has been invoked");
+        try {
+            this.localURLPrefix = FTPConstants.FILE_URL;
+            this.remoteURLPrefix = FTPConstants.SFTP_URL;
+            
+            this.summaryMap = new HashMap<String, String>();
+            this.processedList = new ArrayList<String>();
+            this.ignoredList = new ArrayList<String>();
+            this.fsManager = VFS.getManager();
+            LoggerUtil.infoLog(this.getClass(),
+                    "SFTPFileReader initialization has been completed");
+            LoggerUtil.infoLog(this.getClass(),
+                    "SFTPFileReader: localURLPrefix : " + this.localURLPrefix
+                            + " remoteURLPrefix : " + this.remoteURLPrefix);
+        } catch (final FileSystemException ex) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "SFTPFileReader initialization has seen a FileSystemException ",
+                    ex);
+            throw new FTPInitException("failed to get fsManager from VFS", ex);
+        } catch (final Exception ex) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "SFTPFileReader initialization has occured an exception ",
+                    ex);
+            throw new ApplicationRuntimeException("Some exception in SFTPFileReader.init()", ex);
+        }
+    }
+
+    /*
+     * setup env for SFTP server to connect with provided user name and password
+     * (non-Javadoc)
+     * @see
+     * com.thehartford.thf.integration.ftp.service.AbstractFileReader#connect
+     * (java.lang.String, java.lang.String)
+     */
+    @Override
+    protected final void connect(final String user, final String password)
+            throws FTPConnectionException {
+        LoggerUtil.infoLog(this.getClass(),
+                "SFTPFileReader connect has been invoked with user: " + user);
+        this.summaryMap.put("USER", user);
+        this.summaryMap.put("PASSWORD", password);
+
+        final UserAuthenticator auth = new StaticUserAuthenticator(null, user,
+                password);
+        this.opts = new FileSystemOptions();
+
+        try {
+            SftpFileSystemConfigBuilder.getInstance().setStrictHostKeyChecking(
+                    this.opts, "no");
+        } catch (final FileSystemException e) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "SFTP connection has failed to set "
+                            + "StrictHostKeyChecking configuration");
+            throw new FTPConnectionException(
+                    "setStrictHostKeyChecking has an exception ", e);
+        }
+        try {
+            DefaultFileSystemConfigBuilder.getInstance().setUserAuthenticator(
+                    this.opts, auth);
+        } catch (final FileSystemException ex) {
+            LoggerUtil.errorLog(this.getClass(), "SFTP connection has fail to "
+                    + "authenticate with given user and password");
+            throw new FTPConnectionException("setUserAuthenticator failed", ex);
+        }
+        LoggerUtil.infoLog(this.getClass(),
+                "SFTPFileReader connect has been completed");
+    }
+
+    /*
+     * download files from remote location to local folder for given file
+     * pattern. (non-Javadoc)
+     * @see
+     * com.thehartford.thf.integration.ftp.service.AbstractFileReader#download
+     * (java.lang.String, int, java.lang.String, java.lang.String,
+     * java.lang.String)
+     */
+    @Override
+    protected final int download(final String host, final int port,
+            final String remoteDir, final String localDir,
+            final String filePatternString) throws FTPIOException,
+            FTPConnectionException {
+        LoggerUtil.infoLog(this.getClass(),
+                SFTPFileReader.DOWNLOAD_CALLED_WITH_HOST + host
+                        + SFTPFileReader.STRING_PORT + port
+                        + SFTPFileReader.REMOTE_DIR + remoteDir
+                        + SFTPFileReader.LOCAL_DIR + localDir
+                        + SFTPFileReader.FILE_PATTERN_STRING
+                        + filePatternString);
+        this.summaryMap.put(SFTPFileReader.STRING_HOST, host);
+        this.summaryMap.put(SFTPFileReader.PORT_KEY, String.valueOf(port));
+        this.summaryMap.put(SFTPFileReader.REMOTEDIR_KEY, remoteDir);
+        this.summaryMap.put(SFTPFileReader.LOCALDIR_KEY, localDir);
+        this.summaryMap.put(SFTPFileReader.FILEPATTERN, filePatternString);
+
+        final String hostPortString = (port != 0) ? host + SFTPFileReader.COLON
+                + port : host;
+        LoggerUtil.infoLog(this.getClass(), "download() : hostPortString :  "
+                + hostPortString);
+        final File localDirFile = new File(localDir);
+
+        if (!localDirFile.exists()) {
+            final boolean isSuccess = localDirFile.mkdirs();
+            LoggerUtil.infoLog(this.getClass(),
+                    "local directory created status :" + isSuccess);
+            LoggerUtil.infoLog(
+                    this.getClass(),
+                    "local directory created with name :"
+                            + localDirFile.getName());
+        }
+        final String startPath = this.remoteURLPrefix + hostPortString
+                + remoteDir;
+        LoggerUtil.infoLog(this.getClass(), "download() : startPath :  "
+                + startPath);
+        FileObject[] children;
+
+        // Set starting path on remote SFTP server.
+        try {
+            this.sftpFile = this.fsManager.resolveFile(startPath, this.opts);
+            if (null == this.sftpFile) {
+                throw new FTPConnectionException(
+                        SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteDir);
+            }
+            LoggerUtil.infoLog(this.getClass(),
+                    SFTPFileReader.SFTP_CONNECTION_SUCCESSFULLY_ESTABLISHED_TO
+                            + startPath);
+        } catch (final FileSystemException ex) {
+            LoggerUtil.errorLog(this.getClass(),
+                    SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteDir
+                            + SFTPFileReader.WITH_EXCEPTION, ex);
+            throw new FTPConnectionException(
+                    SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteDir, ex);
+        }
+
+        // Get a directory listing
+        try {
+            children = this.sftpFile.getChildren();
+            // Modified by Nitin
+            if (null == children || children.length==0) {
+                throw new FTPConnectionException(
+                        "could not find any chieldren for given remote path "
+                                + startPath);
+            }
+        } catch (final FileSystemException ex) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "Error collecting directory listing of :" + startPath
+                            + " with exception : ", ex);
+            throw new FTPConnectionException(
+                    "Error collecting directory listing of " + startPath, ex);
+        }
+        // Added by Nitin
+        if (children.length > 0) {
+        this.processFileObject(children, filePatternString, localDir);
+        }
+
+        // Set src for cleanup in release()
+        if (children.length > 0) {
+            this.src = children[0];
+        } else {
+            this.src = this.sftpFile;
+        }
+        this.summaryMap.put(
+                "TOTALRECPROCESSED",
+                String.valueOf((this.processedList.size())
+                        + this.ignoredList.size()));
+        this.summaryMap.put("TOTALFILEDOWNLOADED",
+                String.valueOf(this.processedList.size()));
+        if (SFTPFileReader.LOGGER.isDebugEnabled()) {
+            LoggerUtil.debugLog(this.getClass(),
+                    String.valueOf(this.processedList.size())
+                            + " files downloaded successfully ");
+        }
+        return this.processedList.size();
+
+    }
+
+    /**
+     * process FileObject array to download files.
+     *
+     * @param children
+     *            the children
+     * @param filePatternString
+     *            the file pattern string
+     * @param localDir
+     *            the local dir
+     * @throws FTPIOException
+     *             the fTPIO exception
+     */
+    private void processFileObject(final FileObject[] children,
+            final String filePatternString, final String localDir)
+            throws FTPIOException {
+        LoggerUtil.infoLog(this.getClass(),
+                "processFileObject() starts: start of processFileObject");
+        LoggerUtil.debugLog(this.getClass(),
+                "SFTPReader : Files at SFTP location " + children.length);
+        final Pattern filePattern = null;
+        String[] files = null;
+
+        boolean isDownloadFile = false;
+        if (filePatternString != null) {
+            try {
+                if (filePatternString.contains(FTPConstants.FILE_DELIMITER)) {
+                    files = filePatternString
+                            .split(FTPConstants.FILE_DELIMITER);
+                    isDownloadFile = true;
+                    LoggerUtil.debugLog(this.getClass(),
+                            "SFTPReader : No of Files to be downloaded : "
+                                    + files.length);
+                } else if (filePatternString
+                        .equalsIgnoreCase(FTPConstants.ALL_XMLFILES_PATTERN)) {
+                    // Download all xml files from SFTP remote location to local
+                    this.downloadXMLFiles(children, filePatternString,
+                            localDir, FTPConstants.ALL_XML);
+                } else if (filePatternString
+                        .equals(FTPConstants.ALL_FILES_PATTERN)
+                        || filePatternString
+                                .equals(FTPConstants.ALL_FILES_PATTERN2)
+                        || filePatternString
+                                .equals(FTPConstants.ALL_FILES_PATTERN3)
+                        || filePatternString
+                                .equals(FTPConstants.ALL_FILES_PATTERN4)) {
+                    // Download all files from SFTP remote location to local
+                    this.downloadAllFiles(children, localDir);
+                } else {
+                    // Download single xml file from SFTP remote location to
+                    // local
+                    this.downloadXMLFiles(children, filePatternString,
+                            localDir, FTPConstants.SINGLE_XML);
+                    // filePattern = Pattern.compile(filePatternString);
+                    // isDownloadFile = true;
+                }
+            } catch (final FileSystemException e) {
+                LoggerUtil.errorLog(this.getClass(),
+                        "Filesystem exception occured " + e);
+            }
+
+        }
+        if (isDownloadFile) {
+            final AllFileSelector allFileSelector = new AllFileSelector();
+            for (final FileObject fileObject : children) {
+                try {
+                    final String relativePath = File.separatorChar
+                            + fileObject.getName().getBaseName();
+                    LoggerUtil.debugLog(this.getClass(),
+                            "SFTPReader : relativePath : " + relativePath);
+
+                    if (fileObject.getType() == FileType.FILE) {
+                        LoggerUtil
+                                .debugLog(
+                                        this.getClass(),
+                                        "Examining remote file "
+                                                + fileObject.getName());
+
+                        if (files != null) {
+                            boolean downloadFile = false;
+                            final Set<String> fileNameSet = this
+                                    .createLinkedHashSet(files);
+                            for (final String fileName : fileNameSet) {
+                                if (StringUtils.isNotBlank(fileName)
+                                        && StringUtils.isNotEmpty(fileName)
+                                        && fileObject.getName().getPath()
+                                                .endsWith(fileName)) {
+                                    downloadFile = true;
+                                    LoggerUtil.debugLog(this.getClass(),
+                                            "file matched with given list");
+                                    break;
+                                }
+                            }
+                            if (!downloadFile) {
+                                continue;
+                            }
+
+                        } else if (null != filePattern
+                                && !filePattern.matcher(
+                                        fileObject.getName().getPath())
+                                        .matches()) {
+                            LoggerUtil.infoLog(this.getClass(),
+                                    "Filename does not match, skipping file .  "
+                                            + relativePath);
+                            continue;
+                        }
+                        final String localUrl = this.localURLPrefix + localDir
+                                + relativePath;
+                        final String standardPath = localDir + relativePath;
+                        LoggerUtil.debugLog(this.getClass(),
+                                "Standard local path is .  " + standardPath);
+                        final LocalFile localFile = (LocalFile) this.fsManager
+                                .resolveFile(localUrl);
+                        LoggerUtil.infoLog(
+                                this.getClass(),
+                                "Resolved local file name:  "
+                                        + localFile.getName());
+                        LoggerUtil.infoLog(this.getClass(),
+                                "Retrieving file :::: ");
+                        localFile.copyFrom(fileObject, allFileSelector);
+                        this.processedList.add(fileObject.getName().getPath());
+                    } else {
+                        LoggerUtil.infoLog(this.getClass(),
+                                "Ignoring non-file " + fileObject.getName());
+                        this.ignoredList.add(fileObject.getName().getPath());
+                    }
+                } catch (final FileSystemException ex) {
+                    LoggerUtil.errorLog(
+                            this.getClass(),
+                            "Error getting file type for"
+                                    + fileObject.getName()
+                                    + SFTPFileReader.WITH_EXCEPTION + ex);
+                    throw new FTPIOException("Error getting file type for "
+                            + fileObject.getName(), ex);
+                }
+            }
+        }
+
+    }
+
+    /*
+     * release resources (close file system) (non-Javadoc)
+     * @see
+     * com.thehartford.thf.integration.ftp.service.AbstractFileReader#release()
+     */
+    @Override
+    protected final void release() {
+
+        FileSystem fs = null;
+        if (null != this.src && null != this.fsManager) {
+            fs = this.src.getFileSystem(); // This works even if the src is
+                                           // closed.
+            this.fsManager.closeFileSystem(fs);
+        }
+
+    }
+
+    /*
+     * (non-Javadoc)
+     * @see
+     * com.thehartford.thf.integration.ftp.service.AbstractFileReader#disconnect
+     * ()
+     */
+    @Override
+    protected void disconnect() throws FTPIOException {
+
+    }
+
+    /*
+     * generate summary of processing .Later that would be placed in log file.
+     * (non-Javadoc)
+     * @see
+     * com.thehartford.thf.integration.ftp.service.AbstractFileReader#summary()
+     */
+    @Override
+    protected final void genSummary() {
+    	summaryMap.remove("PASSWORD");
+    	LoggerUtil.infoLog(this.getClass(), "Generating Summary of SFTP interaction: summaryMap=["+summaryMap+"]");
+        /*LoggerUtil.infoLog(this.getClass(),
+                "Host : " + this.summaryMap.get(SFTPFileReader.STRING_HOST));
+        LoggerUtil.infoLog(this.getClass(),
+                "Port : " + this.summaryMap.get(SFTPFileReader.PORT_KEY));
+        LoggerUtil.infoLog(this.getClass(),
+                "user : " + this.summaryMap.get("USER"));       
+        LoggerUtil.infoLog(
+                this.getClass(),
+                "Remote Dir : "
+                        + this.summaryMap.get(SFTPFileReader.REMOTEDIR_KEY));
+        LoggerUtil.infoLog(
+                this.getClass(),
+                "Local Dir : "
+                        + this.summaryMap.get(SFTPFileReader.LOCALDIR_KEY));
+        LoggerUtil.infoLog(
+                this.getClass(),
+                "File Pattern : "
+                        + this.summaryMap.get(SFTPFileReader.FILEPATTERN));
+        LoggerUtil.infoLog(this.getClass(), "Total record Processed : "
+                + this.summaryMap.get("TOTALRECPROCESSED"));
+        LoggerUtil.infoLog(this.getClass(), "Total File downloaded : "
+                + this.summaryMap.get("TOTALFILEDOWNLOADED"));*/
+        LoggerUtil.infoLog(this.getClass(), "List Of file downloaded:==>"+ this.processedList);
+        for (final String fileProcessed : this.processedList) {
+            LoggerUtil.infoLog(this.getClass(), "File : " + fileProcessed);
+        }
+    }
+
+    /*
+     * uploads files from local location to remote folder for given file
+     * pattern. (non-Javadoc)
+     * @see
+     * com.thehartford.thf.integration.ftp.service.AbstractFileReader#upload
+     * (java.lang.String, int, java.lang.String, java.lang.String,
+     * java.lang.String)
+     */
+    /*
+     * added by Saurav
+     */
+    @Override
+    protected final int upload(final WorkflowSession session,
+            final String host, final int port, final String remoteFilePath,
+            final String localFilePath, final String filePatternString)
+            throws FTPConnectionException {
+
+        LoggerUtil.infoLog(SFTPFileReader.class,
+                SFTPFileReader.DOWNLOAD_CALLED_WITH_HOST + host
+                        + SFTPFileReader.STRING_PORT + port
+                        + " remoteFilePath :" + remoteFilePath
+                        + " localFilePath :" + localFilePath
+                        + SFTPFileReader.FILE_PATTERN_STRING
+                        + filePatternString);
+
+        int status = 0;
+        this.summaryMap.put(SFTPFileReader.STRING_HOST, host);
+        this.summaryMap.put(SFTPFileReader.PORT_KEY, String.valueOf(port));
+        this.summaryMap.put(SFTPFileReader.REMOTEDIR_KEY, remoteFilePath);
+        this.summaryMap.put(SFTPFileReader.LOCALDIR_KEY, localFilePath);
+        this.summaryMap.put(SFTPFileReader.FILEPATTERN, filePatternString);
+
+        final String hostPortString = (port != 0) ? host + SFTPFileReader.COLON
+                + port : host;
+        final String documentName = localFilePath.substring(localFilePath
+                .lastIndexOf("/") + 1);
+        final String fileType = localFilePath.substring(localFilePath
+                .lastIndexOf(".") + 1);
+        final String startPath = this.remoteURLPrefix + hostPortString
+                + remoteFilePath + documentName;
+        InputStream inputStream = null;
+        OutputStream out = null;
+        final String damDocumentpath = localFilePath
+                + "/jcr:content/renditions/original/jcr:content";
+
+        LoggerUtil.infoLog(SFTPFileReader.class, "hostPortString ::: "
+                + hostPortString);
+        LoggerUtil.infoLog(SFTPFileReader.class,
+                "damDocumentpath path Of the File::: " + damDocumentpath);
+        LoggerUtil.infoLog(SFTPFileReader.class,
+                "Remote location Where file is being FTPd ::: " + startPath);
+        try {
+
+            // Create remote file object
+            this.sftpFile = this.fsManager.resolveFile(startPath, this.opts);
+            // FileObject localFile = manager.resolveFile(localUrl);
+            if (null == this.sftpFile) {
+                throw new FTPConnectionException(
+                        SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteFilePath);
+            }
+            if (SFTPFileReader.LOGGER.isDebugEnabled()) {
+                LoggerUtil
+                        .debugLog(
+                                this.getClass(),
+                                SFTPFileReader.SFTP_CONNECTION_SUCCESSFULLY_ESTABLISHED_TO
+                                        + startPath);
+            }
+
+            final Node node = session.getSession().getNode(damDocumentpath);
+            LoggerUtil.infoLog(SFTPFileReader.class,
+                    "Node of the file from DAM ::: " + node);
+            inputStream = node.getProperty(JcrConstants.JCR_DATA).getBinary()
+                    .getStream();
+            final File f = File.createTempFile(documentName, "." + fileType);
+            LoggerUtil
+                    .infoLog(
+                            SFTPFileReader.class,
+                            "Temp File Location Of The File ::: "
+                                    + f.getAbsolutePath());
+            // boolean fileCreatedStatus = f.createNewFile();
+            // InputStream inputStream= new
+            // FileInputStream("InputStreamToFile.java");
+            out = new FileOutputStream(f);
+            final byte buf[] = new byte[1024];
+            int len;
+            while ((len = inputStream.read(buf)) > 0) {
+                out.write(buf, 0, len);
+            }
+            out.close();
+            inputStream.close();
+
+            // Create local file object
+            final FileObject localFile = this.fsManager.resolveFile(f
+                    .getAbsolutePath());
+            LoggerUtil.infoLog(SFTPFileReader.class,
+                    "localFile file object created  ::: " + localFile);
+            // f.deleteOnExit();
+            // Copy local file to sftp server
+            this.sftpFile.copyFrom(localFile, Selectors.SELECT_SELF);
+            LoggerUtil.infoLog(SFTPFileReader.class,
+                    "File is uploaded Sucessfully at FTP:::");
+            status = 1;
+        } catch (final FileSystemException ex) {
+            LoggerUtil.errorLog(this.getClass(), "SFTP error parsing path :"
+                    + remoteFilePath + SFTPFileReader.WITH_EXCEPTION + ex);
+            throw new FTPConnectionException(
+                    SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteFilePath, ex);
+        } catch (final PathNotFoundException e) {
+            LoggerUtil.errorLog(SFTPFileReader.class,
+                    "PathNotFoundException exception " + e, "");
+        } catch (final RepositoryException e) {
+            LoggerUtil.errorLog(SFTPFileReader.class,
+                    "RepositoryException exception " + e, "");
+        } catch (final FileNotFoundException e) {
+            LoggerUtil.errorLog(SFTPFileReader.class,
+                    "FileNotFoundException exception " + e, "");
+        } catch (final IOException e) {
+            LoggerUtil.errorLog(SFTPFileReader.class, "IOException exception "
+                    + e, "");
+        } finally {
+            IOUtils.closeQuietly(inputStream);
+            IOUtils.closeQuietly(out);
+        }
+        return status;
+    }
+
+    /*
+     * uploads files from local location to remote folder for given file
+     * pattern. (non-Javadoc)
+     * @see
+     * com.thehartford.thf.integration.ftp.service.AbstractFileReader#upload
+     * (java.lang.String, int, java.lang.String, java.lang.String,
+     * java.lang.String)
+     */
+    
+    @Override
+    protected final int ftpUpload(final String host, final int port, 
+            final String username, final String password,
+            final String remoteFilePath, final String localFilePath,
+            final String filePatternString) throws FTPConnectionException {
+        int status = 0;
+        LoggerUtil.infoLog(this.getClass(), "Inside FTPUpload()............");
+        FTPClient ftpClient = new FTPClient();
+        FileInputStream fis = null;
+        File localFile =  null;
+        int replyCode;
+        boolean connected = false;
+        boolean fileUploaded = false;
+        try {
+            ftpClient.connect(host);
+            connected = ftpClient.login(username, password);
+            if (connected) {
+                LoggerUtil.infoLog(this.getClass(), "FTP Connection established, value of connected is: ", connected);
+                ftpClient.setFileType(FTP.BINARY_FILE_TYPE);
+                replyCode = ftpClient.getReplyCode();
+                LoggerUtil.infoLog(this.getClass(), "replyCode is : ", replyCode);
+                if (FTPReply.isPositiveCompletion(replyCode)) {
+                    LoggerUtil.infoLog(this.getClass(),
+                            "Its a positive FTP Reply: {}", replyCode);
+                }
+                localFile = new File(localFilePath);
+                LoggerUtil.infoLog(this.getClass(), "Local file is at : ", localFile.getAbsolutePath());
+                fis = new FileInputStream(localFile); 
+                ftpClient.changeWorkingDirectory(remoteFilePath);
+                fileUploaded = ftpClient.storeFile(localFile.getName(), fis);
+                LoggerUtil.infoLog(this.getClass(), "ftp uploaded is :: ", fileUploaded);
+                if (!fileUploaded) {
+                    LoggerUtil.errorLog(this.getClass(),
+                    "The file did not get uploaded to FTP host : {} ",
+                    localFile.getName());
+                    status = 1;
+                }
+                ftpClient.logout();
+                ftpClient.disconnect();
+            } else {
+                LoggerUtil.infoLog(this.getClass(),
+                "FTP Connection not established; value of connected is : {}",
+                connected);
+            }
+        } catch (SocketException socketException) {
+            LoggerUtil.errorLog(this.getClass(), "",socketException );
+        } catch (FileNotFoundException fnfException) {
+            LoggerUtil.errorLog(this.getClass(), "", fnfException);
+        } catch (IOException ioException) {
+            LoggerUtil.errorLog(this.getClass(), "", ioException);
+        } catch (Exception e) {
+            LoggerUtil.errorLog(this.getClass(), "", e);
+        } finally {
+            try {
+                if (fis != null) {
+                    fis.close();
+                }
+                ftpClient.disconnect();
+            } catch (IOException e) {
+                LoggerUtil.errorLog(this.getClass(), "", e);
+            }
+        }
+        return status;
+    }
+
+    @Override
+    protected final int bulkPrintCSVUpload(final String host, final int port,
+            final String remoteFilePath, final String localFilePath,
+            final String filePatternString) throws FTPConnectionException {
+
+        if (SFTPFileReader.LOGGER.isDebugEnabled()) {
+            LoggerUtil.debugLog(this.getClass(),
+                    SFTPFileReader.DOWNLOAD_CALLED_WITH_HOST + host
+                            + SFTPFileReader.STRING_PORT + port
+                            + " remoteFilePath :" + remoteFilePath
+                            + " localFilePath :" + localFilePath
+                            + SFTPFileReader.FILE_PATTERN_STRING
+                            + filePatternString);
+        }
+
+        int status = 0;
+        this.summaryMap.put(SFTPFileReader.STRING_HOST, host);
+        this.summaryMap.put(SFTPFileReader.PORT_KEY, String.valueOf(port));
+        this.summaryMap.put(SFTPFileReader.REMOTEDIR_KEY, remoteFilePath);
+        this.summaryMap.put(SFTPFileReader.LOCALDIR_KEY, localFilePath);
+        this.summaryMap.put(SFTPFileReader.FILEPATTERN, filePatternString);
+
+        final String hostPortString = (port != 0) ? host + SFTPFileReader.COLON
+                + port : host;
+        final String documentName = localFilePath.substring(localFilePath
+                .lastIndexOf(File.separator) + 1);
+        final String startPath = this.remoteURLPrefix + hostPortString
+                + remoteFilePath + documentName;
+
+        LoggerUtil.infoLog(SFTPFileReader.class, "hostPortString ::: "
+                + hostPortString);
+        LoggerUtil.infoLog(SFTPFileReader.class,
+                "localfilePath From where CSV will be picked Up ::: "
+                        + localFilePath);
+        LoggerUtil.infoLog(SFTPFileReader.class,
+                "Remote location Where file is being FTPd ::: " + startPath);
+        // String startPath = remoteURLPrefix + hostPortString + remoteFilePath;
+        try {
+
+            // Create remote file object
+            this.sftpFile = this.fsManager.resolveFile(startPath, this.opts);
+            // FileObject localFile = manager.resolveFile(localUrl);
+            if (null == this.sftpFile) {
+                throw new FTPConnectionException(
+                        SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteFilePath);
+            }
+            if (SFTPFileReader.LOGGER.isDebugEnabled()) {
+                LoggerUtil
+                        .debugLog(
+                                this.getClass(),
+                                SFTPFileReader.SFTP_CONNECTION_SUCCESSFULLY_ESTABLISHED_TO
+                                        + startPath);
+            }
+
+            // Get local file
+            final File f = new File(localFilePath);
+            // Create local file object
+            final FileObject localFile = this.fsManager.resolveFile(f
+                    .getAbsolutePath());
+            LoggerUtil.infoLog(SFTPFileReader.class,
+                    "localFile file object created  ::: " + localFile);
+            // Copy local file to sftp server
+            this.sftpFile.copyFrom(localFile, Selectors.SELECT_SELF);
+            status = 1;
+            LoggerUtil.infoLog(SFTPFileReader.class,
+                    "File is uploaded Sucessfully at FTP:::");
+        } catch (final FileSystemException ex) {
+            LoggerUtil.errorLog(this.getClass(), "SFTP error parsing path :"
+                    + remoteFilePath + SFTPFileReader.WITH_EXCEPTION + ex);
+            throw new FTPConnectionException(
+                    SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteFilePath, ex);
+        }
+
+        return status;
+    }
+
+    /**
+     * Downloads single or multiple XML files from given SFTP location based on
+     * the filepattern
+     * given in configuration file.
+     *
+     * @param children
+     *            Array of FileObject
+     * @param filePatternString
+     *            String pattern, which files needs to be downloaded
+     * @param localDir
+     *            String path to local directory where downloaded files will be
+     *            put
+     * @param filesToBeDownloaded
+     *            the files to be downloaded
+     * @throws FileSystemException
+     *             Exception
+     */
+    private void downloadXMLFiles(final FileObject[] children,
+            final String filePatternString, final String localDir,
+            final String filesToBeDownloaded) throws FileSystemException {
+        LoggerUtil.infoLog(this.getClass(), "Start downloading all xml files.");
+        final AllFileSelector allFileSelector = new AllFileSelector();
+        for (final FileObject fileObject : children) {
+            if (fileObject.getType().equals(FileType.FILE)) {
+                if (FTPConstants.SINGLE_XML.equals(filesToBeDownloaded)
+                        && fileObject.getName().getPath()
+                                .contains(filePatternString)) {
+                    // download single xml file
+                    this.startDownload(fileObject, localDir, allFileSelector);
+                    break;
+                } else if (FTPConstants.ALL_XML.equals(filesToBeDownloaded)
+                        && fileObject.getName().getPath().endsWith(".xml")) {
+                    // download multiple xml files
+                    this.startDownload(fileObject, localDir, allFileSelector);
+                }
+            }
+        }
+    }
+
+    /**
+     * Downloads all files from given SFTP location based on the file
+     * pattern(*.* or .* or *. or *)
+     * given in configuration file.
+     *
+     * @param children
+     *            Array of FileObject
+     * @param localDir
+     *            String path to local directory where downloaded files will be
+     *            put
+     * @throws FileSystemException
+     *             Exception
+     */
+    private void downloadAllFiles(final FileObject[] children,
+            final String localDir) throws FileSystemException {
+        LoggerUtil.infoLog(this.getClass(), "Start downloading all files.");
+        final AllFileSelector allFileSelector = new AllFileSelector();
+        for (final FileObject fileObject : children) {
+            if (fileObject.getType().equals(FileType.FOLDER)
+                    || fileObject.getType().equals(FileType.FILE)) {
+                this.startDownload(fileObject, localDir, allFileSelector);
+            }
+        }
+    }
+
+    /**
+     * performs downloading of files.
+     *
+     * @param fileObject
+     *            Object of FileObject, file at the SFTP location
+     * @param localDir
+     *            String path to local directory where downloaded files will be
+     *            put
+     * @param allFileSelector
+     *            Object of AllFileSelector
+     * @throws FileSystemException
+     *             Exception
+     */
+    private void startDownload(final FileObject fileObject,
+            final String localDir, final AllFileSelector allFileSelector)
+            throws FileSystemException {
+        final String relativePath = File.separatorChar
+                + fileObject.getName().getBaseName();
+        final String localUrl = this.localURLPrefix + localDir + relativePath;
+        final String standardPath = localDir + relativePath;
+        LoggerUtil.debugLog(this.getClass(), "Standard local path is .  "
+                + standardPath);
+        LoggerUtil.infoLog(this.getClass(), "Retrieving file : "
+                + fileObject.getName().getBaseName() + " from SFTP : ");
+        final LocalFile localFile = (LocalFile) this.fsManager
+                .resolveFile(localUrl);
+        LoggerUtil.debugLog(this.getClass(), "Resolved local file name:  "
+                + localFile.getName());
+        localFile.copyFrom(fileObject, allFileSelector);
+        this.processedList.add(fileObject.getName().getPath());
+    }
+
+    /**
+     * Creates LinkedHashSet from Array of Strings.
+     *
+     * @param files
+     *            the files
+     * @return the sets the
+     */
+    private Set<String> createLinkedHashSet(final String[] files) {
+        return new LinkedHashSet<String>(Arrays.asList(files));
+    }
+
+	@Override
+	protected void removeFiles(String host, int port, String remoteDir,
+			String filePatternString) throws FTPIOException,
+			FTPConnectionException {
+		LoggerUtil.infoLog(this.getClass(),
+                "Deleting files from SFTP: " + host
+                        + SFTPFileReader.STRING_PORT + port
+                        + SFTPFileReader.REMOTE_DIR + remoteDir
+                        + SFTPFileReader.FILE_PATTERN_STRING
+                        + filePatternString);
+        final String hostPortString = (port != 0) ? host + SFTPFileReader.COLON
+                + port : host;
+        LoggerUtil.infoLog(this.getClass(), "removeFiles() : hostPortString :  "
+                + hostPortString);
+        final String startPath = this.remoteURLPrefix + hostPortString
+                + remoteDir;
+        LoggerUtil.infoLog(this.getClass(), "removeFiles() : startPath :  "
+                + startPath);
+        FileObject[] children;
+
+        // Set starting path on remote SFTP server.
+        try {
+            this.sftpFile = this.fsManager.resolveFile(startPath, this.opts);
+            if (null == this.sftpFile) {
+                throw new FTPConnectionException(
+                        SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteDir);
+            }
+            LoggerUtil.infoLog(this.getClass(),
+                    SFTPFileReader.SFTP_CONNECTION_SUCCESSFULLY_ESTABLISHED_TO
+                            + startPath);
+        } catch (final FileSystemException ex) {
+            LoggerUtil.errorLog(this.getClass(),
+                    SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteDir
+                            + SFTPFileReader.WITH_EXCEPTION, ex);
+            throw new FTPConnectionException(
+                    SFTPFileReader.SFTP_ERROR_PARSING_PATH + remoteDir, ex);
+        }
+
+        // Get a directory listing
+        try {
+            children = this.sftpFile.getChildren();
+
+            if (null == children) {
+                throw new FTPConnectionException(
+                        "could not find any chieldren for given remote path "
+                                + startPath);
+            }
+        } catch (final FileSystemException ex) {
+            LoggerUtil.errorLog(this.getClass(),
+                    "Error collecting directory listing of :" + startPath
+                            + " with exception : ", ex);
+            throw new FTPConnectionException(
+                    "Error collecting directory listing of " + startPath, ex);
+        }
+
+        this.removeFileObject(children, filePatternString);
+	}
+	
+	private void removeFileObject(final FileObject[] children,
+            final String filePatternString)
+            throws FTPIOException {
+        LoggerUtil.infoLog(this.getClass(),
+                "removeFileObject() starts: start of processFileObject");
+        LoggerUtil.debugLog(this.getClass(),
+                "SFTPReader : Files at SFTP location " + children.length);
+        final Pattern filePattern = null;
+        String[] files = null;
+
+        boolean isRemoveFile = false;
+        if (filePatternString != null) {
+            try {
+                if (filePatternString.contains(FTPConstants.FILE_DELIMITER)) {
+                    files = filePatternString
+                            .split(FTPConstants.FILE_DELIMITER);
+                    isRemoveFile = true;
+                    LoggerUtil.debugLog(this.getClass(),
+                            "SFTPReader : No of Files to be downloaded : "
+                                    + files.length);
+                } else if (filePatternString
+                        .equalsIgnoreCase(FTPConstants.ALL_XMLFILES_PATTERN)) {
+                    // Download all xml files from SFTP remote location to local
+                    this.removeXMLFiles(children, filePatternString,
+                            FTPConstants.ALL_XML);
+                } else if (filePatternString
+                        .equals(FTPConstants.ALL_FILES_PATTERN)
+                        || filePatternString
+                                .equals(FTPConstants.ALL_FILES_PATTERN2)
+                        || filePatternString
+                                .equals(FTPConstants.ALL_FILES_PATTERN3)
+                        || filePatternString
+                                .equals(FTPConstants.ALL_FILES_PATTERN4)) {
+                    // Download all files from SFTP remote location to local
+                    this.removeAllFiles(children);
+                } else {
+                    // Download single xml file from SFTP remote location to
+                    // local
+                    this.removeXMLFiles(children, filePatternString,
+                            FTPConstants.SINGLE_XML);
+                    // filePattern = Pattern.compile(filePatternString);
+                    // isDownloadFile = true;
+                }
+            } catch (final FileSystemException e) {
+                LoggerUtil.errorLog(this.getClass(),
+                        "Filesystem exception occured " + e);
+            }
+
+        }
+        if (isRemoveFile) {
+            final AllFileSelector allFileSelector = new AllFileSelector();
+            for (final FileObject fileObject : children) {
+                try {
+                    final String relativePath = File.separatorChar
+                            + fileObject.getName().getBaseName();
+                    LoggerUtil.debugLog(this.getClass(),
+                            "SFTPReader : relativePath : " + relativePath);
+
+                    if (fileObject.getType() == FileType.FILE) {
+                        LoggerUtil
+                                .debugLog(
+                                        this.getClass(),
+                                        "Examining remote file "
+                                                + fileObject.getName());
+
+                        if (files != null) {
+                            boolean downloadFile = false;
+                            final Set<String> fileNameSet = this
+                                    .createLinkedHashSet(files);
+                            for (final String fileName : fileNameSet) {
+                                if (StringUtils.isNotBlank(fileName)
+                                        && StringUtils.isNotEmpty(fileName)
+                                        && fileObject.getName().getPath()
+                                                .endsWith(fileName)) {
+                                    downloadFile = true;
+                                    LoggerUtil.debugLog(this.getClass(),
+                                            "file matched with given list");
+                                    break;
+                                }
+                            }
+                            if (!downloadFile) {
+                                continue;
+                            }
+
+                        } else if (null != filePattern
+                                && !filePattern.matcher(
+                                        fileObject.getName().getPath())
+                                        .matches()) {
+                            LoggerUtil.infoLog(this.getClass(),
+                                    "Filename does not match, skipping file .  "
+                                            + relativePath);
+                            continue;
+                        }
+                        startRemoval(fileObject, allFileSelector);
+                    }
+                } catch (final FileSystemException ex) {
+                    LoggerUtil.errorLog(
+                            this.getClass(),
+                            "Error removing file type for"
+                                    + fileObject.getName()
+                                    + SFTPFileReader.WITH_EXCEPTION + ex);
+                    throw new FTPIOException("Error removing file type for "
+                            + fileObject.getName(), ex);
+                }
+            }
+        }
+    }
+
+	/**
+	 * 
+	 * @param children
+	 * @param filePatternString
+	 * @param filesToBeDownloaded
+	 * @throws FileSystemException
+	 */
+	private void removeXMLFiles(final FileObject[] children,
+			final String filePatternString, final String filesToBeDownloaded)
+			throws FileSystemException {
+		LoggerUtil.infoLog(this.getClass(), "Start removing all xml files.");
+		final AllFileSelector allFileSelector = new AllFileSelector();
+		for (final FileObject fileObject : children) {
+			if (fileObject.getType().equals(FileType.FILE)) {
+				if (FTPConstants.SINGLE_XML.equals(filesToBeDownloaded)
+						&& fileObject.getName().getPath()
+								.contains(filePatternString)) {
+					// download single xml file
+					this.startRemoval(fileObject, allFileSelector);
+					break;
+				} else if (FTPConstants.ALL_XML.equals(filesToBeDownloaded)
+						&& fileObject.getName().getPath().endsWith(".xml")) {
+					// download multiple xml files
+					this.startRemoval(fileObject, allFileSelector);
+				}
+			}
+		}
+	}
+	
+	/**
+	 * 
+	 * @param children
+	 * @throws FileSystemException
+	 */
+	private void removeAllFiles(final FileObject[] children)
+			throws FileSystemException {
+		LoggerUtil.infoLog(this.getClass(), "Start downloading all files.");
+		final AllFileSelector allFileSelector = new AllFileSelector();
+		for (final FileObject fileObject : children) {
+			
+			// Synthesis quarterly job CR - folders should not be deleted from ftp server
+						//if (fileObject.getType().equals(FileType.FOLDER)
+						//		|| fileObject.getType().equals(FileType.FILE)) {
+							if (fileObject.getType().equals(FileType.FILE)) {
+				this.startRemoval(fileObject, allFileSelector);
+			}
+		}
+	}
+	
+	/**
+	 * 
+	 * @param fileObject
+	 * @param allFileSelector
+	 * @throws FileSystemException
+	 */
+	private void startRemoval(final FileObject fileObject,
+            final AllFileSelector allFileSelector)
+            throws FileSystemException {
+        LoggerUtil.infoLog(this.getClass(), "Removing file : "
+                + fileObject.getName().getBaseName() + " from SFTP : ");
+        fileObject.delete(allFileSelector);
+    }
+}
+
+------------------------------------------------------------------------------------------------------------------
+

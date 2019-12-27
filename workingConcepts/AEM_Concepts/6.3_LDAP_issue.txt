@@ -1,0 +1,52 @@
+
+Links
+--------------
+https://helpx.adobe.com/experience-manager/6-3/sites/deploying/using/single-sign-on.html
+https://helpx.adobe.com/experience-manager/6-3/sites/administering/using/ldap-config.html
+---------------------------------------------------------
+All LDAP configurations are now available as OSGi configurations. They can be configured via the Web Management console at:
+http://serveraddress:4502/system/console/configMgr
+
+In order to have LDAP working with AEM, you need to create three OSGi configurations:
+
+1.An LDAP Identity Provider (IDP).
+2.A Sync Handler.
+3.An External Login Module.
+
+------------------------------------------------------------------------------------------------------------------------
+####LDAP IDP
+Configuring The LDAP Identity Provider
+
+1)The LDAP Identity Provider is used to define how users are retrieved from the LDAP server.  
+2)we can configure it from console under the Apache Jackrabbit Oak LDAP Identity Provider name.
+
+set below parameters:
+
+
+------------------------------------------------------------------------------------------------------------------------
+#Sync Handler
+Configuring The Synchronization Handler
+
+1)It is located under the Apache Jackrabbit Oak Default Sync Handler name in the management console.
+
+set below parameters:
+
+--------------------------------------------------
+###External Login Module
+1)The external login module is located under the Apache Jackrabbit Oak External Login Module under the management console.
+2)The Apache Jackrabbit Oak External Login Module implements the Java Authentication and Authorization Servi (JAAS) specifications. 
+
+set below parameters:
+
+-----------------------------------------------------
+Configure LDAP over SSL
+
+1)Check use ssl or use tsl when configuring LDAP
+2)Configure the Sync Handler and the External Login module according to your setup.
+3)Install the SSL certificates in your Java VM if needed. This can be done by using keytool:
+
+keytool -import -alias localCA -file <certificate location> -keystore <keystore location>
+
+4)Check the connection with LDAP server
+
+------------------------------------------------------

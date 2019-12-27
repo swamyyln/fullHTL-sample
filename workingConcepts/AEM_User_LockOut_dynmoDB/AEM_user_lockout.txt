@@ -1,0 +1,552 @@
+package com.thehartford.thf.form.servlets;
+
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.net.URLDecoder;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.TimeZone;
+
+import javax.jcr.Repository;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.jcr.SimpleCredentials;
+import javax.servlet.http.Cookie;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.sling.SlingServlet;
+import org.apache.jackrabbit.commons.JcrUtils;
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.servlets.SlingAllMethodsServlet;
+import org.apache.sling.commons.json.JSONException;
+import org.apache.sling.commons.json.JSONObject;
+import org.apache.sling.jcr.api.SlingRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.thehartford.thf.core.common.constants.ApplicationConstants;
+import com.thehartford.thf.core.dto.CartDTO;
+import com.thehartford.thf.core.exception.ApplicationRuntimeException;
+import com.thehartford.thf.core.exception.ServiceException;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.sessionmanagement.filter.UserDTO;
+import com.thehartford.thf.core.sessionmanagement.util.SessionUtility;
+import com.thehartford.thf.core.util.CRXUtil;
+import com.thehartford.thf.integration.common.exception.LDAPServerException;
+import com.thehartford.thf.integration.ldap.service.LDAPService;
+import com.thehartford.thf.ui.controllers.CartController;
+import com.thehartford.thf.ui.services.AEMDynamoDBIntegrationService;
+import com.thehartford.thf.ui.services.AdminSessionService;
+import com.thehartford.thf.ui.services.CartService;
+import com.thehartford.thf.ui.services.impl.CartConstants;
+import com.thehartford.thf.ui.services.impl.CartUtil;
+import com.thehartford.thf.ui.services.impl.THFDynamoAuthorUser;
+
+@Component(label = "User Lock Status Servlet", description = "User Lock Status Servlet", metatype = false, immediate = true)
+@SlingServlet(generateComponent = false, paths = "/bin/thf/servlets/DynamoDBuserlock", extensions = { "html" }, methods = { "POST" })
+@Property(name = "sling.auth.requirements", value = "-/bin/thf/servlets/DynamoDBuserlock", propertyPrivate = true)
+public class IsUserLockedServlet extends SlingAllMethodsServlet {
+	private static final long serialVersionUID = 1L;
+	   
+    /** The Constant UTF_8. */
+    private static final String UTF_8 = "UTF-8";
+    
+    /** The Constant For admin_User. */
+    private static final String ADMIN_USER="admin";
+    
+    private static final String PASSWORD_EXPIRED="User password has expired";
+    
+    @Reference
+    SlingRepository slingRepository;
+    
+    @Reference
+    AEMDynamoDBIntegrationService aemDynamoDBIntegrationService;
+   
+	
+	public void doPost(final SlingHttpServletRequest request,
+			final SlingHttpServletResponse response) throws IOException {
+		Logger log=LoggerFactory.getLogger(IsUserLockedServlet.class);
+		
+		
+		String req_user = request.getParameter("j_username");
+		String req_password=request.getParameter("j_password");
+		Session userSession = null;
+		
+		 THFDynamoAuthorUser thfDynamoDBAuthObj=null;
+		 
+			//last_modified_date time setting
+	        Date date = new Date();  
+	        DateFormat formatter = new SimpleDateFormat("dd-MM-yyyy hh:mm:ss z"); 
+	        TimeZone tzInAmerica = TimeZone.getTimeZone("America/New_York");
+	        formatter.setTimeZone(tzInAmerica);
+	        
+		try {
+			String user= URLDecoder.decode(req_user);
+			String password= URLDecoder.decode(req_password);
+			
+			LoggerUtil.debugLog(this.getClass(),"Inside userservlet with user: "+user);
+			
+	     if(!user.equalsIgnoreCase(ADMIN_USER)){
+			//authObj=lockAuthorUserService.fetchAuthorUser(user);
+	    	 thfDynamoDBAuthObj=aemDynamoDBIntegrationService.fetchAuthorUserDetailsFromAWSDynamoDB(user);
+			if(null!=thfDynamoDBAuthObj){
+				LoggerUtil.debugLog(this.getClass(),"Inside retrieved authObj with user :"+thfDynamoDBAuthObj.getAuthUserName());
+				LoggerUtil.debugLog(this.getClass(),"current user badPassowrdCount is :"+thfDynamoDBAuthObj.getAuthBadPasswordCount());
+				LoggerUtil.debugLog(this.getClass(),"current user lastModifiedDate is :"+thfDynamoDBAuthObj.getAuthBadPswrdLastModified());
+				response.setContentType("text/html");
+				//response.getWriter().println("IsUserLockedServlet got Invoked with user session"+thfDynamoAuthObj.getAuthUserName());
+			    userSession = slingRepository.login( new SimpleCredentials(user, password.toCharArray()));
+			if(null!=userSession){
+				log.info("Inside session got created");
+				if(null!=thfDynamoDBAuthObj){
+					int i=thfDynamoDBAuthObj.getAuthBadPasswordCount();
+					if(i<5){
+						log.info("Sucessfull_Scenario :: Inside Update badpasswordcount to 0");
+				        //authObj.setBadPasswordCount(0);
+						thfDynamoDBAuthObj.setAuthBadPasswordCount(0);
+						thfDynamoDBAuthObj.setAuthBadPswrdLastModified(formatter.format(date));
+				        //lockAuthorUserService.updateBadPasswordCount(authObj);
+						aemDynamoDBIntegrationService.updateBadPasswordCountAWSDynamoDB(thfDynamoDBAuthObj);
+				        response.getWriter().write("user not locked");
+					}else{
+						response.getWriter().write("user locked");
+					}
+				}
+				if(null!=userSession && userSession.isLive()){
+					userSession.logout();
+				}
+			}else{
+				log.info("Inside session null");
+				if(null!=thfDynamoDBAuthObj){
+					int i=thfDynamoDBAuthObj.getAuthBadPasswordCount();
+					if(i<5){
+						i++;
+						thfDynamoDBAuthObj.setAuthBadPasswordCount(i);
+						thfDynamoDBAuthObj.setAuthBadPswrdLastModified(formatter.format(date));
+						String updatedAuthObjbadPassCount;
+						try {
+							updatedAuthObjbadPassCount=aemDynamoDBIntegrationService.updateBadPasswordCountAWSDynamoDB(thfDynamoDBAuthObj);
+							LoggerUtil.debugLog(this.getClass(),"Now the updtaed badpassword count is"+updatedAuthObjbadPassCount);
+							
+							response.getWriter().write("user not locked");
+						} catch (ServiceException e1) {
+							e1.printStackTrace();
+						}
+						}else{
+						response.getWriter().write("user locked");
+					}
+				}
+			}
+		}else{
+			response.getWriter().write("user not locked");
+		}
+	}else{
+		response.getWriter().write("Admin user ,so skipping the lock service");
+	}
+		} catch (RepositoryException e) {
+			if(!(e.getMessage().equalsIgnoreCase(PASSWORD_EXPIRED))){
+				if(null!=thfDynamoDBAuthObj){
+				int i=thfDynamoDBAuthObj.getAuthBadPasswordCount();
+				if(i<5){
+				i++;
+				thfDynamoDBAuthObj.setAuthBadPasswordCount(i);
+				thfDynamoDBAuthObj.setAuthBadPswrdLastModified(formatter.format(date));
+				String updatedAuthObjbadPassCount;
+				try {
+					updatedAuthObjbadPassCount = aemDynamoDBIntegrationService.updateBadPasswordCountAWSDynamoDB(thfDynamoDBAuthObj);
+					LoggerUtil.debugLog(this.getClass(),"Now the updtaed badpassword count is"+updatedAuthObjbadPassCount);
+					response.getWriter().write("user not locked");
+					//response.getWriter().println("Now the badpassword count is"+updatedAuthObj.getBadPasswordCount());
+				} catch (ServiceException e1) {
+					e1.printStackTrace();
+				}
+				}else{
+					response.getWriter().write("user locked");
+				}
+				}
+			}else{
+				LoggerUtil.debugLog(this.getClass(),"Inside password expired Scenario setting user not locked");
+				response.getWriter().write("user not locked");
+			}
+			LoggerUtil.debugLog(this.getClass(),"Inside RepositoryException :"+e.getMessage());
+			e.printStackTrace();
+		} catch (ServiceException e) {
+			//response.getWriter().write("Unable to get user From User from DB");
+			LoggerUtil.debugLog(this.getClass(),"Inside ServiceException"+e.getMessage());
+			e.printStackTrace();
+		}finally{
+			LoggerUtil.debugLog(this.getClass(),"Inside finally block");
+			if(null!=userSession && userSession.isLive()){
+				LoggerUtil.debugLog(this.getClass(),"Inside finally if block before closing user session");
+				userSession.logout();
+			}
+		}
+	}
+   
+      
+}
+--------------------------------------------------------------------------------------------------------------------------------------------------
+package com.thehartford.thf.ui.services.impl;
+
+public class THFDynamoAuthorUser {
+	
+	private String authUserName;
+	
+	private int authBadPasswordCount;
+	
+	private String authBadPswrdLastModified;
+
+	public String getAuthUserName() {
+		return authUserName;
+	}
+
+	public void setAuthUserName(String authUserName) {
+		this.authUserName = authUserName;
+	}
+
+	public int getAuthBadPasswordCount() {
+		return authBadPasswordCount;
+	}
+
+	public void setAuthBadPasswordCount(int authBadPasswordCount) {
+		this.authBadPasswordCount = authBadPasswordCount;
+	}
+
+	public String getAuthBadPswrdLastModified() {
+		return authBadPswrdLastModified;
+	}
+
+	public void setAuthBadPswrdLastModified(String authBadPswrdLastModified) {
+		this.authBadPswrdLastModified = authBadPswrdLastModified;
+	}
+	
+}
+-------------------------------------------------------------------------------------------------------------
+import com.thehartford.thf.core.exception.ServiceException;
+import com.thehartford.thf.ui.services.impl.THFDynamoAuthorUser;
+
+public interface AEMDynamoDBIntegrationService {
+	
+	//String getAWSDynamoDBConnection() throws ServiceException;
+	
+	String getDynamoDBTable();
+	
+	//fetchAuthorUser
+	THFDynamoAuthorUser fetchAuthorUserDetailsFromAWSDynamoDB(String userId) throws ServiceException;
+	
+	//saveAuthorUser
+	String saveAuthorUserAWSDynamoDB(String userId) throws ServiceException;
+	
+	//updateBadPasswordCount
+	String updateBadPasswordCountAWSDynamoDB(THFDynamoAuthorUser thfDynamoAuthObj) throws ServiceException;
+	
+	String deleteAuthorUserDetailsFromAWSDynamoDB(String userId) throws ServiceException;
+
+}
+
+--------------------------------------------------------------------------------------------------------------
+package com.thehartford.thf.ui.services.impl;
+
+import com.thehartford.thf.core.configmanagement.AbstractConfigService;
+import com.thehartford.thf.core.exception.ServiceException;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.util.EncryptionUtil;
+import com.thehartford.thf.ui.services.AEMDynamoDBIntegrationService;
+
+import java.util.Dictionary;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Service;
+import org.osgi.service.component.ComponentContext;
+
+import com.amazonaws.regions.Regions;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDB;
+import com.amazonaws.services.dynamodbv2.AmazonDynamoDBClientBuilder;
+import com.amazonaws.services.dynamodbv2.document.Item;
+import com.amazonaws.services.dynamodbv2.document.Table;
+import com.amazonaws.services.dynamodbv2.document.UpdateItemOutcome;
+
+@Component(immediate = true, metatype = true,label = "THF AEM DynamoDB LockAuthorUserService")
+
+@Service(value=AEMDynamoDBIntegrationService.class)
+public class AEMDynamoDBIntegrationServiceImpl extends AbstractConfigService implements AEMDynamoDBIntegrationService {
+	
+	//private static final String THF_DYNAMODB_TABLE="THF_AUTHOR_USERS_Dev";
+	
+	@Property(label = "thf dynamoDB table Name",
+            description = "This field defines current dynamo DB table in use",
+            value = "THF_AUTHOR_USERS_Dev"
+            )
+    private static final String THF_DYNAMODB_TABLE = "aem.dynamoDB.tableName";
+	
+	private String dynamoTableName=null;
+	
+	  protected void activate(final ComponentContext context) {
+	        @SuppressWarnings("rawtypes")
+	        final Dictionary properties = context.getProperties();
+	        this.dynamoTableName=this.getStringProperty(properties, AEMDynamoDBIntegrationServiceImpl.THF_DYNAMODB_TABLE);   
+	    }
+	  
+		@Override
+		public String getDynamoDBTable() {
+			// TODO Auto-generated method stub
+			return  this.dynamoTableName;
+		}
+
+
+/*	@Override
+	public String getAWSDynamoDBConnection() throws ServiceException {
+		String aemUserName=null;
+		try{
+			
+			AmazonDynamoDB client = AmazonDynamoDBClientBuilder.standard()
+					.withRegion(Regions.US_EAST_1)
+					.build();  
+			
+			com.amazonaws.services.dynamodbv2.document.DynamoDB dynamoDB=new com.amazonaws.services.dynamodbv2.document.DynamoDB(client);
+			
+			LoggerUtil.debugLog(this.getClass(), "Preparing User Data persist##########");
+	    	Table table = dynamoDB.getTable(THF_DYNAMODB_TABLE);
+	    	
+	    	LoggerUtil.debugLog(this.getClass(),"Table Name"+table.getTableName());
+	    	Item item=table.getItem("Login_Id", "aemUSER2");
+	    	
+	    	if(item==null)
+	    	{
+	    		LoggerUtil.debugLog(this.getClass(), "Cuurently user name is null,inserting a row");
+	    		Item userData=new Item()
+	        			.withPrimaryKey("Login_Id", "aemUSER2")
+	        			.withNumber("Badpassword_count", 5);
+	        	   table.putItem(userData);
+	    	}else{
+	    		aemUserName=item.getString("Badpassword_count");
+	    		LoggerUtil.debugLog(this.getClass(), "else DynamoDB User Name exists and username is :"+aemUserName);
+	    	}
+	    	
+			}catch(Exception e){
+				LoggerUtil.debugLog(this.getClass(), "Inside catch block with exception message : "+e.getMessage());
+			}
+		if(aemUserName!=null){
+			return aemUserName;
+		}else{
+		return "No Dynamo DB Users exists in THF_AUTHOR_USERS table ..!!";
+		}
+	}*/
+
+	@Override
+	public THFDynamoAuthorUser fetchAuthorUserDetailsFromAWSDynamoDB(String userId) throws ServiceException {
+		String authorUserName=null;
+		int badPasswordCount=0;
+		String lastModifiedDate=null;
+		
+		
+		THFDynamoAuthorUser authObj=null;
+		
+		try{
+		AmazonDynamoDB client = AmazonDynamoDBClientBuilder.standard()
+				.withRegion(Regions.US_EAST_1)
+				.build();
+		
+		com.amazonaws.services.dynamodbv2.document.DynamoDB dynamoDB=
+				new com.amazonaws.services.dynamodbv2.document.DynamoDB(client);
+		
+		LoggerUtil.debugLog(this.getClass(), "Fetching User Data from dynamo DB");
+		
+    	Table table = dynamoDB.getTable(this.getDynamoDBTable());
+    	
+    	LoggerUtil.debugLog(this.getClass(),"Table Name"+table.getTableName());
+    	
+    	Item item=table.getItem("Login_Id", userId);
+    	
+    	if(item!=null){
+    		authObj=new THFDynamoAuthorUser();
+    		authorUserName=item.getString("Login_Id");
+    		badPasswordCount=item.getInt("Badpassword_count");
+    		lastModifiedDate=item.getString("LAST_MODIFIED_DATE");
+    		
+    		authObj.setAuthUserName(authorUserName);
+    		authObj.setAuthBadPasswordCount(badPasswordCount);
+    		authObj.setAuthBadPswrdLastModified(lastModifiedDate);
+    		
+    		LoggerUtil.debugLog(this.getClass(),"returning username : "+authObj.getAuthUserName());
+    	}else{
+    		LoggerUtil.debugLog(this.getClass(),"returning authObj as NULL because user with login_Id : "+userId +"does not exist in Dynamo DB");
+    	}
+		}catch(Exception e){
+			LoggerUtil.errorLog(this.getClass(),"Inside fetchAuthorUserDetailsFromAWSDynamoDB catch block due to :" +e.getMessage());
+		}
+    	
+		return authObj;
+	}
+
+	@Override
+	public String saveAuthorUserAWSDynamoDB(String userId) throws ServiceException {
+		String userStatus=null;
+		try{
+		AmazonDynamoDB client = AmazonDynamoDBClientBuilder.standard()
+				.withRegion(Regions.US_EAST_1)
+				.build();  
+		
+		com.amazonaws.services.dynamodbv2.document.DynamoDB dynamoDB=
+				new com.amazonaws.services.dynamodbv2.document.DynamoDB(client);
+		
+		Table table = dynamoDB.getTable(this.getDynamoDBTable());
+		
+    	LoggerUtil.debugLog(this.getClass(),"Table Name"+table.getTableName());
+    	
+    	Item item=table.getItem("Login_Id", userId);
+		if(item==null)
+    	{
+    		LoggerUtil.debugLog(this.getClass(), "Cuurently user name is null,inserting a row");
+    		Item userData=new Item()
+        			.withPrimaryKey("Login_Id", userId)
+        			.withNumber("Badpassword_count", 0)
+    		        .withString("LAST_MODIFIED_DATE","NA");
+    		
+        	   table.putItem(userData);
+        	   
+        	   userStatus="newuser :"+userId+" got created in AWS Dynamo DB";
+    	}else{
+    		userStatus="existingUser";
+    		LoggerUtil.debugLog(this.getClass(),"Username Already exists in DynamoDB");
+    	}
+		}catch(Exception e){
+			LoggerUtil.errorLog(this.getClass(),"Inside saveAuthorUserAWSDynamoDB catch block due to :" +e.getMessage());
+		}
+		return userStatus;
+	}
+
+	@Override
+	public String updateBadPasswordCountAWSDynamoDB(THFDynamoAuthorUser thfDynamoAuthObj) throws ServiceException {
+		
+		LoggerUtil.debugLog(this.getClass(), "Inside updateBadPasswordCountAWSDynamoDB method ");
+	   String updatedUserString=null;
+	   
+		   try{
+			AmazonDynamoDB client = AmazonDynamoDBClientBuilder.standard()
+					.withRegion(Regions.US_EAST_1)
+					.build();  
+			
+			com.amazonaws.services.dynamodbv2.document.DynamoDB dynamoDB=
+					new com.amazonaws.services.dynamodbv2.document.DynamoDB(client);
+			
+			Table table = dynamoDB.getTable(this.getDynamoDBTable());
+			
+			
+			if(thfDynamoAuthObj!=null){
+				LoggerUtil.debugLog(this.getClass(), "Inside updateBadPasswordCountAWSDynamoDB method thfDynamoAuthObj not null");
+				
+				Map expressionAttributeNames = new HashMap();
+		     	expressionAttributeNames.put("#c", "Badpassword_count");
+		     	expressionAttributeNames.put("#date", "LAST_MODIFIED_DATE");
+		     	
+		     	
+		     	Map expressionAttributeValues = new HashMap();
+		     	expressionAttributeValues.put(":val", thfDynamoAuthObj.getAuthBadPasswordCount());
+		     	expressionAttributeValues.put(":dateval", thfDynamoAuthObj.getAuthBadPswrdLastModified());
+		     	
+		     	
+		     	
+				UpdateItemOutcome outcome = table.updateItem(
+		     		    "Login_Id", thfDynamoAuthObj.getAuthUserName(), 
+		     		   "set #c = :val, #date= :dateval",
+		     		    expressionAttributeNames, 
+		     		    expressionAttributeValues);
+				updatedUserString=table.getItem("Login_Id",thfDynamoAuthObj.getAuthUserName()).getJSONPretty("Badpassword_count");
+				
+				LoggerUtil.debugLog(this.getClass(), "Inside updateBadPasswordCountAWSDynamoDB method : "+updatedUserString);
+			}
+		   }
+		catch(Exception e){
+			LoggerUtil.errorLog(this.getClass(),"Inside updateBadPasswordCountAWSDynamoDB catch block due to :" +e.getMessage());
+		}
+		return updatedUserString;
+	}
+	
+
+	@Override
+	public String deleteAuthorUserDetailsFromAWSDynamoDB(String userId)  throws ServiceException {
+		
+		String result="NA";
+		
+		try{
+		AmazonDynamoDB client = AmazonDynamoDBClientBuilder.standard()
+				.withRegion(Regions.US_EAST_1)
+				.build();
+		
+		com.amazonaws.services.dynamodbv2.document.DynamoDB dynamoDB=
+				new com.amazonaws.services.dynamodbv2.document.DynamoDB(client);
+		
+		LoggerUtil.debugLog(this.getClass(), "Inside deleteAuthorUserDetailsFromAWSDynamoDB methid : Fetching User Data from dynamo DB");
+		
+    	Table table = dynamoDB.getTable(this.getDynamoDBTable());
+    	LoggerUtil.debugLog(this.getClass(),"Table Name"+table.getTableName());
+    	
+    	Item item=table.getItem("Login_Id", userId);
+    	
+    	if(item!=null){
+    		table.deleteItem("Login_Id",userId);
+    		LoggerUtil.debugLog(this.getClass(),"deleting username : "+userId);
+    		result="User deleted : "+userId;
+    	}else{
+    		result="user : "+userId+" does not exist";
+    		
+    		LoggerUtil.debugLog(this.getClass(),"returning authObj as NULL because user with login_Id : "+userId +"does not exist in Dynamo DB to perform delete operation");
+    	}
+		}catch(Exception e){
+			LoggerUtil.errorLog(this.getClass(),"Inside deleteAuthorUserDetailsFromAWSDynamoDB catch block due to :" +e.getMessage());
+		}
+    	
+		return result;
+	}
+	
+}
+---------------------------------------------------------------------------------------------------------------------------------------------
+     core/pom.xml
+
+	 <!--AWS Dynamo DB Dependencies Starts here  -->
+		     <dependency>
+		        <groupId>com.amazonaws</groupId>
+		        <artifactId>aws-java-sdk-bom</artifactId>
+		        <version>1.11.453</version>
+		         <type>pom</type>
+		        <scope>import</scope>
+		      </dependency>
+      
+
+			<dependency>
+			    <groupId>com.amazonaws</groupId>
+			    <artifactId>aws-java-sdk-dynamodb</artifactId>
+			    <version>1.11.552</version>
+			</dependency>
+
+
+			<dependency>
+			    <groupId>com.amazonaws</groupId>
+			    <artifactId>aws-java-sdk-ec2</artifactId>
+			    <version>1.11.453</version>
+			</dependency>
+
+			<dependency>
+			    <groupId>org.apache.httpcomponents</groupId>
+			    <artifactId>httpcore</artifactId>
+			    <version>4.4</version>
+			</dependency>
+ 		<!--AWS Dynamo DB Dependencies ENDS here  -->
+		
+		<!--For server to server STFP Transfer  -->
+		 <dependency>
+			<groupId>com.jcraft</groupId>
+			<artifactId>jsch</artifactId>
+			<version>0.1.48</version>
+		</dependency>
+		
+------------------------------------------------------------------------------------------------------

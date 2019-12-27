@@ -1,0 +1,178 @@
+Vanity_Url Configuration
+
+1)In Author add vanity url (/testAfter-->/content/myProject1/en/home.html) from page properties (Basic tab)-->Save and Close
+
+2)hit the url--> localhost:4502/testAfter (home page will be opened)
+
+3)If all works correctly-->replicate the page to publish
+
+4)Directly hit-->localhost:4503/testAfter (Should redirect to localhost:4503/content/myProject1/en/home.html)
+
+----------------------------------------------------------------------------------------------------------------
+
+now at dispatcher end 
+
+1)Create file -->/etc/httpd/conf/vanity_urls
+
+2)To create file [vi vanity_urls-->:w-->change permissions to apache root i.e.,-->chown root:root vanity_urls]
+
+3)Add /vanity_url{} under /farms
+/vanity_urls {
+                    /url "/libs/granite/dispatcher/content/vanityUrls.html"
+                    /file "/etc/httpd/conf/vanity_urls"
+                    /delay 5
+             }
+			 
+4)Add below to filter section
+/00013 { /type "allow" /url "/libs/granite/dispatcher/content/vanityUrls.html" }
+/00014 { /type "deny" /glob "*/testAfter*" }
+
+5)Add not to cache the vanity_urls file
+/cache{
+   /rules{
+       /0012 { /type "deny" /glob "/libs/granite/dispatcher/content/vanityUrls.html" }
+   }
+}
+
+6)Now hit the dispatcher_Url/testAfter  (Should redirect to localhost:4503/content/myProject1/en/home.html)
+
+7)On the next vanity hit of vanity_urls file will updated from publish instance
+
+8)To check existing vanity urls hit below url
+loalhost:4503/libs/granite/dispatcher/content/vanityUrls
+
+9)To check mapping of a vanity url-->go to webconsole-->Sling-->resourceResolver
+
+---------------------------------------------------------------------------------------------
+How to Flush /content/path1 /content/path2 content using only on default flush agent?
+
+1)Add below to a new file call flush.conf
+
+======
+<LocationMatch "^/dispatcher/invalidate.cache$">
+    # domain A (sit.hartfordfunds.com)
+   SetEnvIfNoCase CQ-Path ^/content/thf hostnameforfarm=sit.hartfordfunds.com
+    # domain B (sit.smart529.com)
+   SetEnvIfNoCase CQ-Path ^/content/smart529 hostnameforfarm=sit.smart529.com
+	 # domain C (sit.smart529select.com)
+   SetEnvIfNoCase CQ-Path ^/content/smart529select hostnameforfarm=sit.smart529select.com
+   
+    RequestHeader set Host %{hostnameforfarm}e env=hostnameforfarm
+</LocationMatch>
+=======
+
+2)Include this flush.conf in httpd.conf using below
+
+=======
+IncludeOptional conf/extra/flush.conf
+========
+
+--------------------------------------------------------------------
+
+As per CR-470 Implemented the Vanity urls in SIT environment, please verify on SIT.
+
+ 
+
+Conclusion --> Vanity url must be unique to a page and same url should not be used by any other page while Authoring
+
+                      -->Vanity Urls must start with unique keyword for each website(keyword can be in any alphabetical order and of any length) , this is to
+
+·         deny the urls in dispatcher filter section and
+
+·         to automate rewrite of vanity urls in vanity_urls webserver file,
+
+·         easy identification/distinguish of vanity urls
+
+                                                               
+
+-----------------------------------webserver related changes(10.38.3.5)---------------------------------------------
+
+1)created a file -->/etc/httpd/conf/extra/vanity_urls
+
+ 
+
+2)Changed owner to root(apache user) chown root:root vanity_urls
+
+ 
+
+3)Added section /vanity_url{} under /sithartfordfundscom ,given the delay as 2 [in seconds]
+
+/vanity_urls {
+
+                    /url "/libs/granite/dispatcher/content/vanityUrls.html"
+
+                    /file "/etc/httpd/conf/extra/vanity_urls"
+
+                    /delay 2
+
+             }
+
+                                               
+
+4)Denied the newly created vanity url path in filter section in order to write to vanity_urls file automatically
+
+For that added below to filters section
+
+/00018 { /type "deny" /glob "* /MaytestVanity*" }
+
+ 
+
+5)Added not to cache the vanity_urls page
+
+/cache{
+
+   /rules{
+
+       /0012 { /type "deny" /glob "/libs/granite/dispatcher/content/vanityUrls.html" }
+
+   }
+
+}
+
+------------------------------------------------------publisher related changes(10.38.3.11:4503)--------------------------------------------------------------
+
+1)We need to install vanityurls-components-1.0.2 package in AEM publish instance.
+
+2)Need to change configuration "http://10.38.3.11:4503/system/console/configMgr/org.apache.sling.jcr.resource.internal.JcrResourceResolverFactoryImpl"
+
+                - Enable Vanity Paths = check box
+
+                - Vanity Path Precedence = check box
+
+                - Allowed Vanity Path Location (whitelisting) =leave empty for now
+
+                - Denied Vanity Path Location (balcklisting) =leave empty for now
+
+                                                               
+
+-----------------------------------Authoring vanity url for new/existing pages(10.38.3.12:4502)---------------------------------------------------
+
+1)create a aem page
+
+2)open page properties and add vanity url field [Uncheck the redirect vanity URL]
+
+3)publish the page.
+
+4)Hit the page url in publish instance and with dispatcher domain.
+
+ 
+
+NOTE: if two pages having same vanity url like
+
+ 
+
+page1 - vanityurl1 and
+
+page2 – vanityurl1
+
+ 
+
+then if you try to hit sit.hartfordfunds.com/vanityurl1 then only previously mapped page1 will be rendered but not page2.
+
+
+1)vanity url getting redirected by default. – only After modifying the dispatcher any file Filter entry to [/0000 { /type "deny"  /glob "*" }]  redirection is not occurring even after cache removal.
+
+2)Pages with vanity urls are getting cached.
+
+-------------------------------------------------------------------------------------------------------------------------------------
+

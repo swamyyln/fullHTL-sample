@@ -1,0 +1,197 @@
+http://sling.apache.org/documentation/the-sling-engine/service-authentication.html
+http://sgaem.blogspot.com/2017/10/sling-service-authentication-in-aem-63.html
+
+-----------------------------------------------
+Apache sling user service mapper
+
+Bundle-Symbolic-Name: Sub-Service[Optional] = System-User-Name
+
+1)com.arche11.test.core:myWorkflowInvokeService=swamySystemUser
+2)com.arche11.test.core:abc=swamySystemUser
+-----------------------------------------------
+###servlet
+
+package com.arche11.core.workflow;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.jcr.Session;
+import javax.servlet.Servlet;
+import javax.servlet.ServletException;
+
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.apache.sling.api.servlets.HttpConstants;
+import org.apache.sling.api.servlets.SlingAllMethodsServlet;
+import org.apache.sling.jcr.api.SlingRepository;
+import org.apache.sling.serviceusermapping.ServiceUserMapped;
+import org.apache.sling.serviceusermapping.ServiceUserMapper;
+import org.apache.sling.serviceusermapping.ServiceUserValidator;
+import org.osgi.framework.Constants;
+import org.osgi.framework.FrameworkUtil;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+@Component(service=Servlet.class ,
+property = {
+	Constants.SERVICE_DESCRIPTION + "= Custom Login Service Test",
+	"sling.servlet.methods=" + HttpConstants.METHOD_GET,
+	"sling.servlet.paths=" + "/bin/test/loginServiceTest"
+
+})
+public class CustomLoginServiceServlet extends SlingAllMethodsServlet{
+
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
+	
+	private static final Logger log=LoggerFactory.getLogger(CustomLoginServiceServlet.class);
+
+
+	@Reference
+	CustomLoginService customLoginService;
+	
+	@Reference
+	ServiceUserValidator serviceUserValidator;
+	
+	@Reference
+	ServiceUserMapper serviceUserMapper;
+	
+	@Override
+	protected void doGet(SlingHttpServletRequest request,
+			SlingHttpServletResponse response) throws ServletException,
+			IOException {
+		log.info("Inside servlet");
+		response.getOutputStream().println("current User name with new declaration :"+customLoginService.getSessionUserName());
+		//-------------->getting the service user name using serviceUserMapper
+		response.getOutputStream().println("with null as sub service :"+serviceUserMapper.getServiceUserID(FrameworkUtil.getBundle(this.getClass()),null));
+		response.getOutputStream().println("with my subservice name :"+serviceUserMapper.getServiceUserID(FrameworkUtil.getBundle(this.getClass()), "myWorkflowInvokeService"));
+		response.getOutputStream().println("with abc subservice :"+serviceUserMapper.getServiceUserID(FrameworkUtil.getBundle(this.getClass()), "abc"));
+		//-------------->getting the bundle symbolic name
+		response.getOutputStream().println("My bundle symbolic name is :"+FrameworkUtil.getBundle(this.getClass()).getSymbolicName());
+		
+		//-------------->getting the bundle symbolic name
+		response.getOutputStream().println(serviceUserValidator.isValid("swamySystemUser",FrameworkUtil.getBundle(this.getClass()).getSymbolicName(),"myWorkflowInvokeService"));
+	
+	}
+	
+}
+
+-----------------------------------------------------------------------------------
+
+###interface
+
+package com.arche11.core.workflow;
+
+public interface CustomLoginService {
+
+	
+	 default String getSessionUserName(){
+		 throw new UnsupportedOperationException();
+	 }
+}
+---------------------------------------------------------------------------------
+
+####Impl
+
+package com.arche11.core.workflow;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.servlet.Servlet;
+import javax.servlet.ServletException;
+
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.apache.sling.api.servlets.HttpConstants;
+import org.apache.sling.api.servlets.SlingAllMethodsServlet;
+import org.apache.sling.jcr.api.SlingRepository;
+import org.apache.sling.serviceusermapping.ServiceUserMapped;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+@Component(service=CustomLoginService.class ,
+
+//Until unless you map this subservice to user mapping ,component will not be in active state
+
+// ServiceUserMapped.class is an marker interface which has no methods in it but acts as flag (activate or deactivate)
+//to activate/deactivate the osgi component based on user-service mapping present/not present (respectively)
+
+// serviceUserMapper.getServiceUserId() will give you the user mapped to particular subservice
+
+// ServiceUserValidator.isValid() will return true/false
+reference={@Reference(name ="swamySystemUser",
+                      target="(subServiceName=myWorkflowInvokeService1)",
+                      service=ServiceUserMapped.class)},
+property = { Constants.SERVICE_DESCRIPTION
+	+ "=My Custom Login Service Test" })
+public class CustomLoginServiceImpl implements CustomLoginService{
+
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
+	
+	private static final Logger log=LoggerFactory.getLogger(CustomLoginServiceImpl.class);
+
+	@Reference
+	SlingRepository repository;
+	
+	@Reference
+	ResourceResolverFactory rrf;
+	
+	@Override
+	public String getSessionUserName(){
+		
+		Map<String, Object> param = new HashMap<String, Object>();
+        param.put(ResourceResolverFactory.SUBSERVICE, "myWorkflowInvokeService");
+        ResourceResolver rr = null;
+        Session session=null;
+           
+            try {
+            	
+            	///session=repository.loginService(null,null);//Works only if there is only bundle-symbolicName=swamySystemUser configuration
+            	
+            	///session=repository.loginService(sub-service123,null);//Works only if there is only bundle-symbolicName:sub-service123=swamySystemUser configuration
+            	
+            	/// param.put(ResourceResolverFactory.SUBSERVICE, "myWorkflowInvokeService");///Works only if there is only bundle-symbolicName:myWorkflowInvokeService=swamySystemUser configuration
+				
+				rr = rrf.getServiceResourceResolver(param);
+				session=rr.adaptTo(Session.class);
+				log.info("With SlingRepository got the user session :"+session.getUserID());
+				
+            }
+            catch(LoginException re){
+            log.error(re.getMessage());
+  
+            }
+            return session.getUserID();
+	}
+	
+}
+
+
+--------------------------------------------------------------------------------------------------------
+
+We can configure service user mapping in two ways:
+
+1)getServiceResourceResolver(rrf.subservice,"subservice-Name");
+2)slingRepository.loginservice(null,null);--when only bundle mapped to service user
+3)slingRepositoryloginservice("sub-service-name",null);--then subservice should be mentioned in service user mapping

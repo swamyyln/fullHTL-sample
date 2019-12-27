@@ -1,0 +1,76 @@
+
+
+1)com.day.cq.dam.core.process.ExtractMetadataProcess is no longer supported in AEM 6.3
+
+2)Since we have customised this class ,we are not getting any exception (UnsupportedOperationException).
+
+3)We have to refer to "com.day.cq.dam.core.process.MetadataProcessorProcess" instead.
+
+4)Ideally in our customisation we need to change below method
+SimpleXmpToJcrMetadataBuilder.storeAsXmp(metadata, metadataNode,false);--old
+
+SimpleXmpToJcrMetadataBuilder.storeAsXmp(metadata, asset,false);--new added
+
+
+Logs for Reference :
+
+  at com.day.cq.dam.core.impl.handler.xmp.NCommXMPHandler.readXmpMetadata(NCommXMPHandler.java:134)
+        at com.day.cq.dam.commons.handler.StandardImageHandler.extractMetadata(StandardImageHandler.java:404)
+        at com.day.cq.dam.commons.handler.StandardImageHandler.extractMetadata(StandardImageHandler.java:207)
+        at com.day.cq.dam.core.process.XMPWritebackProcess.writeXmp(XMPWritebackProcess.java:395)
+        at com.day.cq.dam.core.process.XMPWritebackProcess.execute(XMPWritebackProcess.java:196)
+        at com.day.cq.workflow.compatibility.CQWorkflowProcessRunner.execute(CQWorkflowProcessRunner.java:93)
+        at com.adobe.granite.workflow.core.job.HandlerBase.executeProcess(HandlerBase.java:189)
+        at com.adobe.granite.workflow.core.job.JobHandler.process(JobHandler.java:258)
+        at org.apache.sling.event.impl.jobs.JobConsumerManager$JobConsumerWrapper.process(JobConsumerManager.java:500)
+        at org.apache.sling.event.impl.jobs.queues.JobQueueImpl.startJob(JobQueueImpl.java:291)
+        at org.apache.sling.event.impl.jobs.queues.JobQueueImpl.access$100(JobQueueImpl.java:58)
+        at org.apache.sling.event.impl.jobs.queues.JobQueueImpl$1.run(JobQueueImpl.java:227)
+        at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149)
+        at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+        at java.lang.Thread.run(Thread.java:748)
+25.04.2018 03:04:42.640 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/dam-xmp-writeback_345:/content/dam/thf/TestImage1.jpg/jcr:content/metadata] com.day.cq.dam.commons.handler.StandardImageHandler extractMetadata, done
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.day.cq.dam.commons.metadata.SimpleXmpToJcrMetadataBuilder PATH: /content/dam/thf/TestImage1.jpg/jcr:content/metadata/dam:extracted:2018-04-25T03:04:42.767-04:00
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.day.cq.dam.commons.metadata.SimpleXmpToJcrMetadataBuilder PATH: /content/dam/thf/TestImage1.jpg/jcr:content/metadata/dc:format:image/jpeg
+25.04.2018 03:04:42.774 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ImageRenditionsUpdate Inside the class ImageRenditionsUpdate
+25.04.2018 03:04:42.774 *INFO* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.WorkflowUtils Going to step : Thumbnail creation
+25.04.2018 03:04:42.797 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ImageRenditionsUpdate Asset is not pdf, going to second branch
+25.04.2018 03:04:42.797 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ImageRenditionsUpdate Exiting the class Image Renditions Update
+25.04.2018 03:04:42.800 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.CreateAssetMetaData Inside execute() of CreateAssetMetaData.java.
+25.04.2018 03:04:42.800 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.CreateAssetMetaData *************** docPath is : /content/dam/thf/TestImage1.jpg/jcr:content/renditions/original
+25.04.2018 03:04:42.800 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.CreateAssetMetaData before updatejava.util.GregorianCalendar[time=1524639882119,areFieldsSet=true,areAllFieldsSet=true,lenient=false,zone=sun.util.calendar.ZoneInfo[id="GMT-04:00",offset=-14400000,dstSavings=0,useDaylight=false,transitions=0,lastRule=null],firstDayOfWeek=1,minimalDaysInFirstWeek=1,ERA=1,YEAR=2018,MONTH=3,WEEK_OF_YEAR=17,WEEK_OF_MONTH=4,DAY_OF_MONTH=25,DAY_OF_YEAR=115,DAY_OF_WEEK=4,DAY_OF_WEEK_IN_MONTH=4,AM_PM=0,HOUR=3,HOUR_OF_DAY=3,MINUTE=4,SECOND=42,MILLISECOND=119,ZONE_OFFSET=-14400000,DST_OFFSET=0]
+25.04.2018 03:04:42.800 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.CreateAssetMetaData property  --> dc:uuidValue --->C0DF80CA-CC3F-4761-A0F4-B699C32A2923
+25.04.2018 03:04:42.806 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.CreateAssetMetaData property  --> dam:sha1Value --->02a3fbe56a79439e737c664c6d57609080fc248c
+
+
+
+
+
+
+] com.thehartford.thf.workflows.ExtractMetadataProcess got hierarchical subjects [lr:hierarchicalSubject] with content [].
+25.04.2018 03:04:42.069 *WARN* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_342:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess unexpected error occurred during metadata extraction. Cause: null
+java.lang.NullPointerException: null
+        at com.thehartford.thf.workflows.ExtractMetadataProcess.execute(ExtractMetadataProcess.java:189)
+        at com.day.cq.workflow.compatibility.CQWorkflowProcessRunner.execute(CQWorkflowProcessRunner.java:93)
+        at com.adobe.granite.workflow.core.job.HandlerBase.executeProcess(HandlerBase.java:189)
+        at com.adobe.granite.workflow.core.job.JobHandler.process(JobHandler.java:258)
+        at org.apache.sling.event.impl.jobs.JobConsumerManager$JobConsumerWrapper.process(JobConsumerManager.java:500)
+        at org.apache.sling.event.impl.jobs.queues.JobQueueImpl.startJob(JobQueueImpl.java:291)
+        at org.apache.sling.event.impl.jobs.queues.JobQueueImpl.access$100(JobQueueImpl.java:58)
+        at org.apache.sling.event.impl.jobs.queues.JobQueueImpl$1.run(JobQueueImpl.java:227)
+        at java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1149)
+        at java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:624)
+        at java.lang.Thread.run(Thread.java:748)
+25.04.2018 03:04:42.766 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess getting payload
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess retrieved payload: [/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original]
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess olduuid -> C0DF80CA-CC3F-4761-A0F4-B699C32A2923
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess oldjcrTitle - >
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess Mime Type image/jpeg
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess savemetadatajava.util.GregorianCalendar[time=1524639882119,areFieldsSet=true,areAllFieldsSet=true,lenient=false,zone=sun.util.calendar.ZoneInfo[id="GMT-04:00",offset=-14400000,dstSavings=0,useDaylight=false,transitions=0,lastRule=null],firstDayOfWeek=1,minimalDaysInFirstWeek=1,ERA=1,YEAR=2018,MONTH=3,WEEK_OF_YEAR=17,WEEK_OF_MONTH=4,DAY_OF_MONTH=25,DAY_OF_YEAR=115,DAY_OF_WEEK=4,DAY_OF_WEEK_IN_MONTH=4,AM_PM=0,HOUR=3,HOUR_OF_DAY=3,MINUTE=4,SECOND=42,MILLISECOND=119,ZONE_OFFSET=-14400000,DST_OFFSET=0]
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess new uuid -> C0DF80CA-CC3F-4761-A0F4-B699C32A2923
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess new jcrTitle - >
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess got hierarchical subjects [lr:hierarchicalSubject] with content [].
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess new uuid -> C0DF80CA-CC3F-4761-A0F4-B699C32A2923
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess newjcrTitle - >
+25.04.2018 03:04:42.767 *DEBUG* [JobHandler: /etc/workflow/instances/server0/2018-04-24/update_asset_346:/content/dam/thf/TestImage1.jpg/jcr:content/renditions/original] com.thehartford.thf.workflows.ExtractMetadataProcess oldjcrTitle value is Empty So setting jcrTitle to new value :
+

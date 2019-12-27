@@ -1,0 +1,249 @@
+package com.thehartford.thf.ui.handler;
+
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.HashSet;
+import java.util.Locale;
+
+
+import javax.jcr.RepositoryException;
+
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.Service;
+import org.apache.jackrabbit.api.security.user.Authorizable;
+import org.apache.jackrabbit.api.security.user.UserManager;
+import org.apache.sling.api.resource.ModifiableValueMap;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+
+import com.day.cq.replication.Preprocessor;
+import com.day.cq.replication.ReplicationAction;
+import com.day.cq.replication.ReplicationException;
+import com.day.cq.replication.ReplicationOptions;
+import com.thehartford.thf.core.configmanagement.ConfigService;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.mail.GenericMailConfiguration;
+import com.thehartford.thf.core.mail.GenericMailService;
+import com.thehartford.thf.core.mail.impl.MailConstants;
+import com.thehartford.thf.core.util.MailUtils;
+import com.thehartford.thf.ui.services.AdminSessionService;
+import com.thehartford.thf.utils.JcrUtil;
+import com.adobe.granite.security.user.UserProperties;
+import com.adobe.granite.security.user.UserPropertiesManager;
+
+@Component(
+        label = "THF Page Tracking Handler",
+        immediate = true
+)
+@Service
+public class PageTrackingMailProcessor implements Preprocessor{
+
+	   @Reference
+	  	private AdminSessionService adminsessionService;
+	    
+	    @Reference
+		private GenericMailService mailService;
+	    
+	    @Reference
+		private ConfigService configService;
+	    
+		private String sitedmin = "/cf#";
+		
+		private String givenName="All";
+		
+	@Override
+	public void preprocess(ReplicationAction replicationAction, ReplicationOptions replicationOptions) throws ReplicationException {
+		
+		 ResourceResolver rr=null;
+         String isPageTrackingEnabled=null;
+         String[] notificationEmailIds=null;
+         
+         
+         try {
+        	 LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Inside preprocess method before Action");
+        	 
+        	 LoggerUtil.infoLog(PageTrackingMailProcessor.class,"Replication action {} occured on {} and triggered by {}", replicationAction.getType().getName(), replicationAction.getPath() ,replicationAction.getUserId());
+				rr=adminsessionService.getAdministrativeResourceResolver();
+				if(rr!=null){
+					LoggerUtil.debugLog(PageTrackingMailProcessor.class,"obtained resource resolver with user name : {}",rr.getUserID().toString());
+				}
+				 String path = replicationAction.getPath();
+				 String eventTriggeredBy= replicationAction.getUserId();
+				 
+				 if(null!=path && path.startsWith("/content/thf/en")){
+				 //Only for workflows
+				 if(eventTriggeredBy.equalsIgnoreCase("workflow-process-service")){
+					if(path.contains("/jcr:content")){
+						path=path.substring(0, path.lastIndexOf("/jcr:content"));
+						}
+				 }
+					
+				  final Resource resource = rr.getResource(path);
+				 
+				  if (resource == null) {
+					    LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Could not find resource to send mail notification");
+		                return;
+		            }
+				  
+				  if(resource.getValueMap() != null && resource.getValueMap().get("jcr:primaryType", String.class)!= null && resource.getValueMap().get("jcr:primaryType", String.class).equalsIgnoreCase("cq:Page")){
+					  
+					  if(!(eventTriggeredBy.equalsIgnoreCase("thf-system-user")) || !(eventTriggeredBy.equalsIgnoreCase("webservice-support-replication"))){
+					 
+					  final Resource jcrResource = resource.getChild("jcr:content");
+					  final ModifiableValueMap jcrProperties = jcrResource.adaptTo(ModifiableValueMap.class);
+					
+					 
+					  if(jcrProperties.containsKey("enablePageTracking")){
+						  isPageTrackingEnabled=jcrProperties.get("enablePageTracking",String.class);
+						  LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Inside preprocess , isPageTrackingEnabled :"+isPageTrackingEnabled);
+					  }
+					  
+					  if(null!=isPageTrackingEnabled && isPageTrackingEnabled.equalsIgnoreCase("true")){
+						  
+						  LoggerUtil.infoLog(PageTrackingMailProcessor.class,"current cq:lastReplicatedBy :"+eventTriggeredBy);
+						  LoggerUtil.infoLog(PageTrackingMailProcessor.class,"current cq:lastReplicationAction :"+replicationAction.getType().getName());
+						  LoggerUtil.infoLog(PageTrackingMailProcessor.class,"current cq:lastReplicated :"+new Date());
+						  
+						  if(jcrProperties.containsKey("notificationEmailIds")){
+							  
+							  notificationEmailIds=jcrProperties.get("notificationEmailIds",new String[] {});
+							  LoggerUtil.debugLog(PageTrackingMailProcessor.class,"notification mailIds :"+jcrProperties.get("notificationEmailIds").toString());
+							  
+							  if(eventTriggeredBy.equalsIgnoreCase("workflow-process-service")){
+								  eventTriggeredBy="Workflow";
+							  }
+							  String currentAction=replicationAction.getType().getName() +"d";
+	                          String mySubject="Hartfordfunds.com content that you are tracking has been "+currentAction;    
+	                       
+	                         this.sendMailAlert(mySubject,this.getUserEmailIds(rr,notificationEmailIds),currentAction,eventTriggeredBy,path);
+						  }else{
+							  LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Page tracking is enabled but there no emailId's configured in page properties");
+						  }
+						      
+					  }
+					  
+					  LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Inside preprocess method After Action");
+				  }else{
+					  LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Inside PageTrackingMailProcessor : replication triggered by system-users");
+				  }
+				 
+				  }
+         }else{
+			  LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Inside PageTrackingMailProcessor : Not a Page");
+		  }
+         } catch (Exception e) {
+				e.printStackTrace();
+			} finally{
+				   if(rr!=null && rr.isLive()){
+			    	   rr.close();
+			       }
+			}
+	}
+	
+public String[] getUserEmailIds(ResourceResolver rr,String[] notificationEmailIds ){	
+		
+		List<String> finalResultEmailList = new ArrayList<String>(); 
+		List<String> notificationList = new ArrayList<String>(); 
+		notificationList.addAll(Arrays.asList(notificationEmailIds));
+		
+		List<String> notificationListFinal = new ArrayList<String>(new HashSet<String>(notificationList)); 
+	     
+		try{
+		UserManager userMang=rr.adaptTo(UserManager.class);
+		
+		UserPropertiesManager uPropMang=rr.adaptTo(UserPropertiesManager.class);
+		
+		for(String authId:notificationListFinal){
+			Authorizable authorizable=userMang.getAuthorizable(authId);
+			String email=null;
+			if(!authorizable.isGroup()){
+				UserProperties uProp=uPropMang.getUserProperties(authorizable, "profile");
+				
+				 LoggerUtil.debugLog(PageTrackingMailProcessor.class,"userName : "+authorizable.getID());
+				 LoggerUtil.debugLog(PageTrackingMailProcessor.class,"uProp : "+uProp);
+				
+				if(null!=uProp){
+				
+				if(null!=uProp.getProperty(UserProperties.EMAIL)){
+					email=uProp.getProperty(UserProperties.EMAIL);
+					 LoggerUtil.debugLog(PageTrackingMailProcessor.class,"email :"+email);
+				}
+				else{
+					 LoggerUtil.debugLog(PageTrackingMailProcessor.class," No email proeprty present for userName : "+authorizable.getID());
+					email=null;
+				}
+				if(null!=uProp.getProperty(UserProperties.GIVEN_NAME)){
+					this.givenName=uProp.getProperty(UserProperties.GIVEN_NAME);
+				}
+			}	
+		}
+			if(null!=email){
+				finalResultEmailList.add(email);
+			}
+		}
+		}catch(RepositoryException e){
+			LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Repository Exception2", e.getMessage());
+		}
+		 String[] finalMailRecipients = new String[finalResultEmailList.size()];
+		 finalMailRecipients= finalResultEmailList.toArray(finalMailRecipients);
+		 
+		return finalMailRecipients;
+	}
+	
+	 private void sendMailAlert(String subject,String[] finalEmailIds,
+			  String action,String lastreplicatedby,String pagepath) {
+	    	LoggerUtil.debugLog(PageTrackingMailProcessor.class,"Inside sendMailAlert()");
+			StringBuilder table = new StringBuilder();
+         try{
+       	 
+       	table.append("<table>");
+       	table.append("<tr>");
+       	table.append("<td>");
+       	table.append("<a href='"
+ 					+ configService.getOnsiteAuthorBaseUrl()
+ 					+ this.sitedmin + pagepath + ".html"+ "'>"
+ 					+pagepath+ "</a>");
+       	table.append("</td>");
+       	table.append("</tr>");
+ 			table.append("</table>");
+       	  
+			Map<String, Object> mailProperties = new HashMap<String, Object>();
+			
+			mailProperties.put("subject", subject);
+			mailProperties.put("salutation",MailUtils.getServerInformation(configService) + "<br/><br/>");
+			
+			if(null!=finalEmailIds && finalEmailIds.length > 1 ){
+				mailProperties.put("trackinguser", "All");
+			}else{
+				mailProperties.put("trackinguser",this.givenName);
+			}
+			
+			
+			
+			mailProperties.put("table", table);
+			mailProperties.put("action", action);
+			mailProperties.put("lastreplicatedby", lastreplicatedby);
+			mailProperties.put("lastreplicatedon", new Date());
+			
+			
+			String contactEmail[] =  finalEmailIds;
+			
+			GenericMailConfiguration mailConfig = this.mailService.getGenericMailConfiguration(MailConstants.INTERNAL_GENERIC_EMAIL);
+			
+			mailConfig.sendMail("/etc/notification/email/thf/pageTrackingMessage",contactEmail, mailProperties);
+			
+	    }catch(Exception e){
+ 		e.printStackTrace();
+ 	}finally{
+ 		table=null;
+ 	}
+			LoggerUtil.debugLog(PageTrackingMailProcessor.class,"sendMailAlert() method exit");
+		}
+}

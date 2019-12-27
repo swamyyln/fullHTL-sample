@@ -1,0 +1,161 @@
+
+1)LDAP is used for accessing centralized directory services.
+2)One such LDAP server is Active Directory.
+3)LDAP is often used to achieve Single Sign On which allows a user to access multiple applications after logging in once.
+4)User accounts can be synchronized between the LDAP server and the AEM, with LDAP account details being saved in the AEM.
+5)The AEM uses LDAP authentication to authenticate such users, with credentials being passed to the LDAP server for validation, which is required before allowing access to the AEM.
+
+## LDAP Details configured in AEM
+In order to have LDAP working with AEM, We need to create below OSGi configurations in AEM Publish environment:
+
+a)An LDAP Identity Provider (IDP).
+
+LDAP Provider Name = custom_ldap
+LDAP Server Hostname = 10.38.3.9
+LDAP Server Port = 636
+Use SSL = true
+Bind DN: CN=thf,CN=Users,DC=adthf,DC=com
+Bind Password=
+Search Timeout=60secs
+Admin pool max active=8
+
+User base DN: OU=publish,OU=people,DC=adthf,DC=com
+User object classes=person
+User id attribute=userPrincipalName
+
+Group base DN: OU=publish,OU=group,DC=adthf,DC=com
+Group object classes=group
+Group name attribute=cn
+Group member attribute=member
+
+
+b)Default Sync Handler.
+(In THF Using JMX bean logic to sync users through code by using LDAP Connection and jmx Mbean=External Identity Synchronization Management)
+
+c)External Login Module
+The external login module is the bridge between the login, the IDP, and the Sync Handler.
+
+JAAS Ranking=50
+JAAS Control Flag=SUFFICIENT
+JAAS Realm=
+Identity Provider Name= custom_ldap
+Sync Handler Name = default
+
+d)THF LDAP Publish Service
+
+Distinguished name for the groups : CN=%s,OU=publish,OU=group,DC=adthf,DC=com
+Distinguished name for the users : CN=%s,OU=publish,OU=people,DC=adthf,DC=com
+LDAP Host = 10.38.3.9
+LDAP Port = 636
+LDAP Username = adthf\thfaduser
+LDAP Password = 
+Min Connection Pool Size = 1
+Max Connection Pool Size= 2
+Java TrustStore Location on OS= /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.181-3.b13.el7_5.x86_64/jre/lib/security/cacerts
+Java TrustStore password in JDK= 
+JMX LDAPMBean= com.adobe.granite.ldap:host=10.38.3.9,port=636,type=Tools
+Base DN = OU=publish,OU=people,DC=adthf,DC=com
+
+------------------------------------------------------------
+## Details of LDAP Server (10.38.3.9 with port=636) Configuration
+
+create OU
+create Group
+•	Author
+•	Publish
+create People
+•	Author
+•	Publish
+
+Custom attributes need to be created 
+Configured custom attributes are listed below- 
+ - activationStatus
+ - branchIdOrCity
+ - individualCRD
+ - passwordHint
+ - preferredRole
+ - role
+ - lastName
+ - firstName
+ - addressLn1
+ - addressLn2
+ - state
+ - city
+ - zipCode
+ 
+CREATION OF SELF-SIGNED CERTIFICATES
+
+--------------------------------------------------
+
+currently using LDAP API (for getting LDAP connection and for querying LDAP users)
+
+ com.day.ldap.LDAPAttribute;
+ com.day.ldap.LDAPAttributeSet;
+ com.day.ldap.LDAPConnection;
+ com.day.ldap.LDAPEntry;
+ com.day.ldap.LDAPException;
+ com.day.ldap.LDAPModification;
+ com.day.ldap.LDAPModificationSet;
+ com.day.ldap.LDAPSearchResults;
+ com.day.ldap.util.ConnectionPool;
+ 
+ Inside OSGI Component activate method   --> com.day.ldap.util.ConnectionPool = this.initConnectionPool();
+ Inside OSGI Component deactivate method -->com.day.ldap.util.ConnectionPool.destroy();
+ 
+ 
+ In order to get LDAP connection pool,we need
+ 
+ -min connection pool size
+ -max connection pool size
+ -version
+ -LDAP Host
+ -LDAP PORT
+ -LDAP Username
+ -LDAP Password
+ -LDAPSSLSocketFactory
+ 
+		  to create LDAPSSLSocketFactory we need 
+		 -Java TrustStore Location on OS
+		 -Java TrustStore password in JDK
+		 
+		  SSLContext sslContext = SSLContextFactory.createSSLContext(this.trustStoreLocation, this.trustStorePwd, null);
+		  SocketFactory socketfactory = sslContext.getSocketFactory();
+		  Socket socket = socketfactory.createSocket(paramString[Host where SSL Socket has to be opened], paramInt[Port number]);
+		  SSLSocket sslSocket =socket instanceof SSLSocket ? (SSLSocket) socket : null;
+		  sslSocket.startHandshake();
+  
+1)Connectionpool will be retrieved 
+
+ConnectionPool connectionPool connectionPool = new ConnectionPool(minSize, maxSize, version,
+					LDAP Host, LDAP PORT, LDAP Username, LDAP Password,
+					LDAPSSLSocketFactory);
+
+2)get connection from Connectionpool.
+3)Once connection is obtained we can authenticate,add,read,modify,remove ldap users
+4)Prepare customised attribute set using UserProfileDTO
+  
+   connection.authenticate(rdn, currentPassword);
+   
+  //add user to LDAP
+ LDAPEntry newEntry = new LDAPEntry(THF_USER_UID, attributeSet);
+        connection.add(newEntry);//insert record in to LDAP
+		
+  // 
+  connection = this.connectionPool.getConnection();
+  String userDN = String.format(this.userDistinguishedName, uid);
+  String[] attributes = { PersistenceConstants.RESET_PWD_KEY.getValue(), };
+  LDAPEntry entry = connection.read(userDN, attributes);
+  LDAPAttribute resetPwdKeyAttr = entry.getAttribute(PersistenceConstants.RESET_PWD_KEY.getValue());
+		
+  //add user to group
+		connection.modify(groupContainer,this.getLDAPModificationAdd(memberAttr));//add member to group
+		
+		   connection.modify(userDN, ldapModification);
+		   
+		    connection.delete(userDN);
+
+connectionPool.close(connection);
+
+CustomSSOAuthHandler-->processRegistration --->this.ldapService.createUserProfile(profileDTO);
+
+

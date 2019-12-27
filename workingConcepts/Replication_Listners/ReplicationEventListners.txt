@@ -1,0 +1,151 @@
+package com.swamy.replication.core.servlets;
+
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.event.EventHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.day.cq.replication.ReplicationAction;
+import com.day.cq.workflow.event.WorkflowEvent;
+
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.TimeZone;
+
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.jcr.Node;
+
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.osgi.framework.Constants;
+import org.osgi.service.event.Event;
+import org.osgi.service.event.EventConstants;
+
+@Component(
+service = EventHandler.class, immediate = true, property = {
+		Constants.SERVICE_DESCRIPTION + "=Swamy Demo to listen event.job.topic on page Activation ",
+		EventConstants.EVENT_TOPIC + "="+ReplicationAction.EVENT_TOPIC,
+		EventConstants.EVENT_FILTER + "(&" + "(path=/content/we-retail/us/en/*)"+")"})
+
+public class ReplicationEventListner implements Runnable, EventHandler {
+     
+    private Logger log = LoggerFactory.getLogger(this.getClass());
+     
+    @Reference
+	ResourceResolverFactory rrf;
+    
+ 
+     
+    public void handleEvent(Event event) {
+ 
+        String n[] = event.getPropertyNames();
+         ResourceResolver rr=null;
+         Session session=null;
+         
+         String lastReplicatedBy=null;
+         String lastReplicationOn=null;
+         String lastReplicationAction=null;
+      
+        try {
+        Map<String, Object> param = new HashMap<String, Object>();
+	       param.put(ResourceResolverFactory.SUBSERVICE, "swamy-replicationEvent-listenerService");
+	    
+			rr=rrf.getServiceResourceResolver(param);
+			session=rr.adaptTo(Session.class);
+			
+			
+			if(rr!=null){
+				log.info("obtained resource resolver with user name : "+rr.getUserID().toString());
+				log.info("obtained session with user name : "+session.getUserID());
+			}
+		
+ 
+       /* log.info("");
+ 
+        log.info("Event occurred: {}", event.getProperty(WorkflowEvent.EVENT_TYPE));
+ 
+        log.info("Event properties: ");
+ 
+        for(String s : n) {
+ 
+            log.info(s + " = " + event.getProperty(s));
+ 
+        }*/
+ 
+        ReplicationAction action = ReplicationAction.fromEvent(event);
+
+        if(action != null) {
+                 if(action.getType().getName().equals("Deactivate")){
+                  log.info("Replication action {} occured on {} ", action.getType().getName(), action.getPath());
+                  
+                  try {
+                      if (null!=action.getPath()
+                              && !action.getPath().contains("=")
+                              && session.nodeExists(action.getPath())) {
+                    	  
+                         Node jcrContentNode=session.getNode(action.getPath()+"/jcr:content");
+                         
+                         if (null != jcrContentNode) {
+                        	 
+                        	 if(jcrContentNode.hasProperty("cq:lastReplicatedBy")){
+                        		 lastReplicatedBy=jcrContentNode.getProperty("cq:lastReplicatedBy").getString();
+                        		  log.info("Deactivated by : "+lastReplicatedBy);
+                        	 }
+                        	 if(jcrContentNode.hasProperty("cq:lastReplicated")){
+                        		 lastReplicationOn=jcrContentNode.getProperty("cq:lastReplicated").getString();
+                        		  log.info("Deactivated On : "+lastReplicationOn);
+                        		  
+                        		
+                    	   		  DateFormat crxDateFormat;
+                    	   		  DateFormat fileDateFormat;
+                    	   		fileDateFormat = new SimpleDateFormat("yyyy-MM-dd");
+                    		   	crxDateFormat = new SimpleDateFormat("EEE MMM dd HH:mm:ss z yyyy", Locale.US);
+                    		   		
+                    		   	String req_dateEST=crxDateFormat.format(fileDateFormat.parse(lastReplicationOn));
+                    	   		
+                    	   	 log.info("Formatted Deactivated On : "+req_dateEST);
+                        	 }
+                        	 if(jcrContentNode.hasProperty("cq:lastReplicationAction")){
+                        		 lastReplicationAction=jcrContentNode.getProperty("cq:lastReplicationAction").getString();
+                        		  log.info("Status : "+lastReplicationAction);
+                        	 }
+                        	 
+                              
+                         }
+                      }
+                  } catch (final NullPointerException e) {
+                      log.error("NullPointer Exception", e);
+                  } catch (final RepositoryException e) {
+                	  log.error("Repository Exception", e);
+                  } catch (ParseException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+				}
+                 }
+ 
+        }
+        
+        } catch (LoginException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}finally{
+			   if(rr!=null && rr.isLive()){
+		    	   rr.close();
+		       }
+		}
+ 
+    }
+     
+     
+    public void run() {
+        log.info("Running...");
+    }
+}

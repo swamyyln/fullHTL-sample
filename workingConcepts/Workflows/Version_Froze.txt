@@ -1,0 +1,116 @@
+package myJavaProject;
+
+import java.util.Calendar;
+import java.util.Date;
+import java.util.StringTokenizer;
+
+import javax.jcr.Node;
+import javax.jcr.NodeIterator;
+import javax.jcr.Repository;
+import javax.jcr.SimpleCredentials;
+import javax.jcr.query.Query;
+import javax.jcr.query.QueryResult;
+import javax.jcr.version.Version;
+import javax.jcr.version.VersionHistory;
+import javax.jcr.version.VersionIterator;
+import javax.jcr.version.VersionManager;
+
+import org.apache.jackrabbit.commons.JcrUtils;
+
+public class THF_Frozen_Node {
+
+	
+	public static void main(String[] args) {
+		
+		
+		 Repository repository;
+			try {
+				repository = JcrUtils.getRepository("http://localhost:4502/crx/server");
+				
+				  
+				   javax.jcr.Session session = repository.login( new SimpleCredentials("admin", "admin".toCharArray()));		
+					
+				   Node mixinNode=session.getNode("/content/we-retail/testPage/jcr:content");
+				   
+				   if(mixinNode.hasProperty("jcr:title")){
+					   String title=mixinNode.getProperty("jcr:title").getString();
+					   System.out.println("current doc name :"+title);
+				   }
+				   
+				   //first mixin property needs to be added for target content node
+				   
+				  // ---------------------------------------Add mixin property start----------------------------------------------
+				  
+				   /*System.out.println("****before adding mixin****");
+				    mixinNode.addMixin("mix:versionable");
+				    session.save();
+				    System.out.println("****After adding mixin****");*/
+				   
+				   // ---------------------------------------Add mixin property end----------------------------------------------
+				 
+				    ///1.get the version Manager
+				   VersionManager vm=session.getWorkspace().getVersionManager();
+				   
+				   ///2.get version history of custom content path
+				   VersionHistory vHistory=vm.getVersionHistory("/content/we-retail/testPage/jcr:content");
+				   
+				   ///3.get version iterator from version history
+				   VersionIterator vIterator=vHistory.getAllVersions();
+				   
+				   while(vIterator.hasNext()){
+					   Version v=(Version) vIterator.next();
+					   
+					   String versionName=v.getName();
+					   Date versionCreatedDate=v.getCreated().getTime();
+					   
+					   System.out.println("Current Version :"+versionName);
+					   System.out.println("version created on :"+versionCreatedDate);
+					   
+					   //if you want to purge all versions created for a path use below if loop
+					   
+					  /* if(!v.getName().equals("jcr:rootVersion")){
+						   vHistory.removeVersion(v.getName());
+					   }*/
+					   
+					   //if you want to purge only specific version use below if loop
+					   if(v.getName().equals("1.0")){
+						   vHistory.removeVersion(v.getName());
+					   }
+				   }
+				   
+				   
+				   
+				   System.out.println("****before version checkout****");
+				   vm.checkout("/content/we-retail/testPage/jcr:content");
+				  
+				   mixinNode.setProperty("vmTestPropAfterV2", "vmTestValueAfterV2");
+				   session.save();
+				  
+				   vm.checkin("/content/we-retail/testPage/jcr:content");
+				
+				   System.out.println("****After version checkin --with content modified****");
+				   
+						//--------------------------------------------------------------------------------
+						StringBuilder stbldr=new StringBuilder();
+						
+						stbldr.append("auth_token_1,");
+						stbldr.append("auth_token_2,");
+						stbldr.append("auth_token_3,");
+						stbldr.append("auth_token_4");
+						
+						StringTokenizer st=new StringTokenizer(stbldr.toString(),",");
+					
+						while(st.hasMoreTokens()){
+							String s1=st.nextToken();
+							
+							System.out.println("current token :"+ s1);
+						}
+						
+					}
+					catch(Exception e){
+						e.printStackTrace();
+					}
+					
+
+	}
+}

@@ -1,0 +1,9 @@
+setlocal EnableDelayedExpansion 
+
+for %%a in (D:\Jenkins\jobs\Dev-Upgrade\workspace\package\thf-fullpackage\target\*.zip) do (
+set fileVariable=%%a
+)
+
+echo !fileVariable!
+
+curl -u admin:Wipro@123 -F file=@!fileVariable! -F force=true -F install=true http://10.39.3.18:5402/crx/packmgr/service.jsp

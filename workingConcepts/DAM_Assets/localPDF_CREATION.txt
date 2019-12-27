@@ -1,0 +1,265 @@
+package com.arche11.core.workflow;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.adobe.granite.workflow.WorkflowException;
+import com.adobe.granite.workflow.WorkflowSession;
+import com.adobe.granite.workflow.exec.WorkItem;
+import com.adobe.granite.workflow.exec.WorkflowProcess;
+import com.adobe.granite.workflow.metadata.MetaDataMap;
+import com.day.cq.dam.api.AssetManager;
+import com.day.cq.replication.ReplicationActionType;
+import com.day.cq.replication.ReplicationException;
+import com.day.cq.replication.Replicator;
+
+@Component(service=WorkflowProcess.class,property={"process.label=MyCustomDamRenditionProcess",
+        Constants.SERVICE_DESCRIPTION+"=This is my custom DAM Workflow"})
+public class DamAssetRenditionCreationPublishProcess implements WorkflowProcess{
+
+	private Logger log=LoggerFactory.getLogger(DamAssetRenditionCreationPublishProcess.class);
+	
+	private File file;
+	
+	private static final String FILE_PATH="C:/Users/YE20004956/Desktop/swamyPDFLocation/";
+	private static final String FILE_NAME="encoding_example.pdf";
+	private static final String DAM_LOCATION="/content/dam/swamypdfdocs/";
+	
+	@Reference
+	private Replicator replicatorService;
+	
+	@Reference
+	private ResourceResolverFactory rrf;
+	
+	@Override
+	public void execute(WorkItem workItem, WorkflowSession wfSession, MetaDataMap metadataMap)
+			throws WorkflowException {
+		log.info("DamAssetRenditionCreationPublishProcess execute method");
+		Session session=null;
+		ResourceResolver rr = null;
+		InputStream inputStream=null;
+		
+		Map<String, Object> param = new HashMap<String, Object>();
+        param.put(ResourceResolverFactory.SUBSERVICE, "myWorkflowInvokeService");
+        
+        
+        try {
+			rr=rrf.getServiceResourceResolver(param);
+			session=rr.adaptTo(Session.class);
+			log.info("DamAssetRenditionCreationPublishProcess session user ="+session.getUserID());
+			file=new File(FILE_PATH+FILE_NAME);
+			log.info("DamAssetRenditionCreationPublishProcess file path ="+file.getPath());
+			log.info("before input stream");
+			inputStream=new FileInputStream(file);//open input stream
+			log.info("after input stream");
+			this.createDamAsset(inputStream, FILE_NAME, session, DAM_LOCATION, "application/pdf", rr);//create asset
+			inputStream.close();//close the input stream
+			//delete the pdf from source location
+			if (file.delete()) {
+				log.info("File deleted successfully");
+			} else {
+				log.info("Failed to delete the file");
+			}
+			
+		} catch (LoginException | RepositoryException | IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+        
+        
+        
+        
+	}
+	private void createDamAsset(InputStream is, String fileName,
+			javax.jcr.Session session, String damLocation, String fileType,
+			ResourceResolver resolver) throws RepositoryException,
+			LoginException {
+		log.info("inside createDamAsset method");
+		log.info("Dam Location " + damLocation);
+		
+		AssetManager assetManager = resolver.adaptTo(AssetManager.class);
+		assetManager.createAsset(damLocation + fileName, is, fileType, true);
+		session.save();
+		
+		this.replicate(session, damLocation + fileName);
+		session.logout();
+
+	}
+	private void replicate(Session session,String nodePath)
+	{
+		
+		try {	
+          log.info("Trying to replicate");		
+		this.replicatorService.replicate(session, ReplicationActionType.ACTIVATE, nodePath);
+		} catch (ReplicationException replicationException) {
+			log.error("ReplicationException while activating the payload {}",replicationException);
+		} catch (Exception e) {
+			log.error("Exception while activating the payload {}", e);
+		}
+	}
+}
+--------------------------------------------------------------------------------------
+
+package myJavaProject;
+
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.Properties;
+
+import com.lowagie.text.Document;
+import com.lowagie.text.DocumentException;
+import com.lowagie.text.Font;
+import com.lowagie.text.FontFactory;
+import com.lowagie.text.Paragraph;
+import com.lowagie.text.Phrase;
+import com.lowagie.text.pdf.PdfPCell;
+import com.lowagie.text.pdf.PdfPTable;
+import com.lowagie.text.pdf.PdfWriter;
+ 
+//We can create PDF file using iText or lowagie.text API
+//need to download com.lowagie.text-2.1.7 jar from java2s
+public class TestPDF {
+ 
+    /** The resulting PDF file. */
+    public static final String RESULT
+        = "C:/Users/YE20004956/Desktop/swamyPDFLocation/encoding_example.pdf";
+    /** The path to the font. */
+    public static final String FONT
+        = "c:/windows/fonts/arialbd.ttf";
+    
+    public static final String FONT_BSKT = "resources/fonts/FreeSans.ttf";
+ 
+    /**
+     * Creates a PDF document.
+     * @param filename the path to the new PDF document
+     * @throws DocumentException 
+     * @throws IOException 
+     * @throws    DocumentException 
+     * @throws    IOException
+     */
+    public void createPdf(String filename) throws IOException, DocumentException {
+        // step 1
+        Document document = new Document();
+        // step 2
+        PdfWriter.getInstance(document, new FileOutputStream(filename));
+        // step 3
+        document.open();
+        // step 4
+        Font boldFont = FontFactory.getFont(FONT_BSKT, "Cp1253", true);
+        
+        boldFont.setSize(8);
+        //font.setStyle=0 normal
+        //font.setStyle=1 normal + bold
+        //font.setStyle=2 italic
+        //font.setStyle=3 italic + bold
+        boldFont.setStyle(Font.NORMAL);
+        
+    	Font normalFont = FontFactory.getFont(FONT_BSKT, "Cp1253", true);
+		normalFont.setSize(8);
+		normalFont.setStyle(0);
+        
+		PdfPTable table = new PdfPTable(5);
+		table.setWidthPercentage(100);
+		
+		try {
+			table.setWidths(new int[] { 6, 6, 8, 16, 8 });
+		} catch (com.lowagie.text.DocumentException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		table.setHorizontalAlignment(PdfPTable.ALIGN_BASELINE);
+		// the cell object
+		PdfPCell cell = new PdfPCell(new Phrase("CUSIP", boldFont));
+		cell.setColspan(1);
+		PdfPCell cell2 = new PdfPCell(new Phrase("TICKER", boldFont));
+		cell2.setColspan(1);
+		PdfPCell cell3 = new PdfPCell(new Phrase("ISIN", boldFont));
+		cell3.setColspan(1);
+		PdfPCell cell4 = new PdfPCell(new Phrase("COMPANY", boldFont));
+		cell4.setColspan(1);
+		PdfPCell cell5 = new PdfPCell(new Phrase("SHARES", boldFont));
+		cell5.setColspan(1);
+		table.addCell(cell);
+		table.addCell(cell2);
+		table.addCell(cell3);
+		table.addCell(cell4);
+		table.addCell(cell5);
+		table.completeRow();
+		
+		
+		PdfPTable table1 = new PdfPTable(2);
+
+		Font f = FontFactory.getFont(FONT, "Cp1253", true);
+		f.setSize(8);
+		table1.setWidths(new int[] { 18, 6 });
+		table1.setHorizontalAlignment(PdfPTable.ALIGN_LEFT);
+		PdfPCell tableOnecell5 = new PdfPCell(new Phrase("first", f));
+		cell5.setColspan(1);
+		PdfPCell tableOnecell6 = new PdfPCell(new Phrase(
+				"second", f));
+		tableOnecell6.setColspan(1);
+		table1.addCell(tableOnecell5);
+		table1.addCell(tableOnecell6);
+		table1.completeRow();
+		document.add(table1);
+		
+		Properties properties=new Properties();
+		properties.put("heading", "myHeading" );
+		properties.put("p1", "my paragraph1");
+		properties.put("p2", "my paragraph2");
+		properties.put("p3", "my Paragraph3");
+		properties.put("p4", "my Paragraph4");
+		
+		Paragraph paragraph = new Paragraph(properties.getProperty("heading"),
+				boldFont);
+		paragraph.setSpacingAfter(20);
+		document.add(paragraph);
+
+		
+		paragraph = new Paragraph(properties.getProperty("p1"), normalFont);
+		paragraph.setSpacingAfter(8);
+		document.add(paragraph);
+		paragraph = new Paragraph(properties.getProperty("p2"), normalFont);
+		paragraph.setSpacingAfter(8);
+		document.add(paragraph);
+		paragraph = new Paragraph(properties.getProperty("p3"), normalFont);
+		paragraph.setSpacingAfter(8);
+		document.add(paragraph);
+		paragraph = new Paragraph(properties.getProperty("p4"), normalFont);
+		paragraph.setSpacingAfter(12);
+		document.add(paragraph);
+		
+		
+		document.add(table);
+        // step 5
+        document.close();
+    }
+ 
+    /**
+     * Main method.
+     *
+     * @param    args    no arguments needed
+     * @throws DocumentException 
+     * @throws IOException
+     */
+    public static void main(String[] args)
+        throws IOException, DocumentException {
+        new TestPDF().createPdf(RESULT);
+    }
+}

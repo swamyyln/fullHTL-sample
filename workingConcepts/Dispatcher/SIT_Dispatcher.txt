@@ -1,0 +1,359 @@
+# name of the dispatcher
+/name "thf-server"
+	# each farm configures a set off (loadbalanced) renders
+	
+	
+	/farms
+	{
+		# first farm entry (label is not important, just for your convenience)
+		/sithartfordfundscom
+		{  
+			/clientheaders
+			{
+				"referer"
+				"user-agent"
+				"authorization"
+				"from"
+				"content-type"
+				"content-length"
+				"accept-charset"
+				"accept-encoding"
+				"accept-language"
+				"accept"
+				"host"
+				"if-match"
+				"if-none-match"
+				"if-range"
+				"if-unmodified-since"
+				"max-forwards"
+				"proxy-authorization"
+				"proxy-connection"
+				"range"
+				"cookie"
+				"Set-cookie"
+				"cq-action"
+				"cq-handle"
+				"handle"
+				"action"
+				"cqstats"
+				"depth"
+				"translate"
+				"expires"
+				"date"
+				"dav"
+				"ms-author-via"
+				"if"
+				"lock-token"
+				"x-expected-entity-length"
+				"destination"
+				"mod_include_status"
+			   	"authstatus"
+				"userrole"
+				"userfirm"
+				"userstate"
+				"CSRF-Token"
+			}
+			/virtualhosts
+			{
+				"sit.hartfordfunds.com"
+			}
+			/renders
+			{
+				/render0
+				{
+					/hostname "10.38.3.11"
+					/port "4503"
+				}
+			}
+			/filter
+			{
+				# List of filters
+				/0000 { /type "allow"  /glob "*" }
+				/0001 { /type "deny" /glob "* /etc/*" }				
+				/0002 { /type "allow" /glob "* /etc/designs/*" }
+				/0003 { /type "allow" /glob "* /etc/clientlibs/*" }
+				/0004 { /type "allow" /glob "* /etc/clientcontext/*" }
+				/0005 { /type "allow" /glob "* /etc/segmentation*" }
+				/0006 { /type "deny" /glob "* /libs/*" }
+				/0007 { /type "allow" /glob "* /libs/cq/*" }
+				/0008 { /type "allow" /glob "* /libs/granite/*" }
+				/0009 { /type "deny" /glob "* /bin/*" }
+				/00010 { /type "allow" /glob "* /bin/thf/*" }
+			/00010 { /type "allow" /glob "* /bin/Select529/*" }	
+				/00011 { /type "allow" /glob "* /libs/granite/csrf/token.json" }
+			}
+			/cache
+			{
+				/docroot "/data/dispatcher/cache"
+				/statfileslevel "0"
+
+				# caches also authorized data
+				/allowAuthorized "1"				
+				# Cache configuration
+				/rules
+				{
+					#DENY
+					/0000 { /glob "*" /type "allow" }
+					/0001 { /glob "*/dam/*/auth/*" /type "deny" }
+					/0002 { /glob "*sessioncheck*" /type "deny" }
+					/0003 { /glob "*/cart-pages/*" /type "deny" }
+					/0004 { /glob "*/profile-pages/*" /type "deny" }                                        
+					/0005 { /glob "*/profile-pages/register.html" /type "allow" }
+					/0006 { /glob "*insightlisting.InsightsListing.json*" /type "deny" }
+				#	/0007 { /glob "*/funds.*.html" /type "deny" }
+					/0008 { /glob "*showcompareoverlay*" /type "deny" }
+					/0009 { /glob "*.nocache.html*" /type "deny" }
+                                        #/0009 { /glob "*.html" /type "deny" }
+                                        /0010 { /glob "*/printPage.html" /type "deny" }
+                                        /0011 { /glob "*/auth-pages/*" /type "deny" }
+				}
+				/invalidate
+				{
+					/0000 { /glob "*" /type "allow" }
+				}
+			}
+			/statistics
+			{
+				/categories
+				{
+					/html { /glob "*.html" }
+					/others { /glob "*" }
+				}
+			}
+		}
+		
+		/sitsmart529com
+		{  
+			/clientheaders
+			{
+				"referer"
+				"user-agent"
+				"authorization"
+				"from"
+				"content-type"
+				"content-length"
+				"accept-charset"
+				"accept-encoding"
+				"accept-language"
+				"accept"
+				"host"
+				"if-match"
+				"if-none-match"
+				"if-range"
+				"if-unmodified-since"
+				"max-forwards"
+				"proxy-authorization"
+				"proxy-connection"
+				"range"
+				"cookie"
+				"Set-cookie"
+				"cq-action"
+				"cq-handle"
+				"handle"
+				"action"
+				"cqstats"
+				"depth"
+				"translate"
+				"expires"
+				"date"
+				"dav"
+				"ms-author-via"
+				"if"
+				"lock-token"
+				"x-expected-entity-length"
+				"destination"
+				"mod_include_status"
+			   	"authstatus"
+				"userrole"
+				"userfirm"
+				"userstate"
+				"CSRF-Token"
+			}
+			/virtualhosts
+			{
+				"sit.smart529.com"
+			}
+			/renders
+			{
+				/render0
+				{
+					/hostname "10.38.3.11"
+					/port "4503"
+				}
+			}
+			/filter
+			{
+				# List of filters
+				/0000 { /type "allow"  /glob "*" }
+				/0001 { /type "deny" /glob "* /etc/*" }				
+				/0002 { /type "allow" /glob "* /etc/designs/*" }
+				/0003 { /type "allow" /glob "* /etc/clientlibs/*" }
+				/0004 { /type "allow" /glob "* /etc/clientcontext/*" }
+				/0005 { /type "allow" /glob "* /etc/segmentation*" }
+				/0006 { /type "deny" /glob "* /libs/*" }
+				/0007 { /type "allow" /glob "* /libs/cq/*" }
+				/0008 { /type "allow" /glob "* /libs/granite/*" }
+				/0009 { /type "deny" /glob "* /bin/*" }
+				/00010 { /type "allow" /glob "* /bin/thf/*" }
+			/00010 { /type "allow" /glob "* /bin/Select529/*" }	
+				/00011 { /type "allow" /glob "* /libs/granite/csrf/token.json" }
+			}
+			/cache
+			{
+				/docroot "/data/dispatcher/cache"
+				/statfileslevel "0"
+
+				# caches also authorized data
+				/allowAuthorized "1"				
+				# Cache configuration
+				/rules
+				{
+					#DENY
+					/0000 { /glob "*" /type "allow" }
+					/0001 { /glob "*/dam/*/auth/*" /type "deny" }
+					/0002 { /glob "*sessioncheck*" /type "deny" }
+					/0003 { /glob "*/cart-pages/*" /type "deny" }
+					/0004 { /glob "*/profile-pages/*" /type "deny" }                                        
+					/0005 { /glob "*/profile-pages/register.html" /type "allow" }
+					/0006 { /glob "*insightlisting.InsightsListing.json*" /type "deny" }
+				#	/0007 { /glob "*/funds.*.html" /type "deny" }
+					/0008 { /glob "*showcompareoverlay*" /type "deny" }
+					/0009 { /glob "*.nocache.html*" /type "deny" }
+                                        #/0009 { /glob "*.html" /type "deny" }
+                                        /0010 { /glob "*/printPage.html" /type "deny" }
+                                        /0011 { /glob "*/auth-pages/*" /type "deny" }
+				}
+				/invalidate
+				{
+					/0000 { /glob "*" /type "allow" }
+				}
+			}
+			/statistics
+			{
+				/categories
+				{
+					/html { /glob "*.html" }
+					/others { /glob "*" }
+				}
+			}
+		}
+		
+		/sitsmart529select
+		{  
+			/clientheaders
+			{
+				"referer"
+				"user-agent"
+				"authorization"
+				"from"
+				"content-type"
+				"content-length"
+				"accept-charset"
+				"accept-encoding"
+				"accept-language"
+				"accept"
+				"host"
+				"if-match"
+				"if-none-match"
+				"if-range"
+				"if-unmodified-since"
+				"max-forwards"
+				"proxy-authorization"
+				"proxy-connection"
+				"range"
+				"cookie"
+				"Set-cookie"
+				"cq-action"
+				"cq-handle"
+				"handle"
+				"action"
+				"cqstats"
+				"depth"
+				"translate"
+				"expires"
+				"date"
+				"dav"
+				"ms-author-via"
+				"if"
+				"lock-token"
+				"x-expected-entity-length"
+				"destination"
+				"mod_include_status"
+			   	"authstatus"
+				"userrole"
+				"userfirm"
+				"userstate"
+				"CSRF-Token"
+			}
+			/virtualhosts
+			{
+				"sit.smart529select.com"
+			}
+			/renders
+			{
+				/render0
+				{
+					/hostname "10.38.3.11"
+					/port "4503"
+				}
+			}
+			/filter
+			{
+				# List of filters
+				/0000 { /type "allow"  /glob "*" }
+				/0001 { /type "deny" /glob "* /etc/*" }				
+				/0002 { /type "allow" /glob "* /etc/designs/*" }
+				/0003 { /type "allow" /glob "* /etc/clientlibs/*" }
+				/0004 { /type "allow" /glob "* /etc/clientcontext/*" }
+				/0005 { /type "allow" /glob "* /etc/segmentation*" }
+				/0006 { /type "deny" /glob "* /libs/*" }
+				/0007 { /type "allow" /glob "* /libs/cq/*" }
+				/0008 { /type "allow" /glob "* /libs/granite/*" }
+				/0009 { /type "deny" /glob "* /bin/*" }
+				/00010 { /type "allow" /glob "* /bin/thf/*" }
+			/00010 { /type "allow" /glob "* /bin/Select529/*" }	
+				/00011 { /type "allow" /glob "* /libs/granite/csrf/token.json" }
+			}
+			/cache
+			{
+				/docroot "/data/dispatcher/cache"
+				/statfileslevel "0"
+
+				# caches also authorized data
+				/allowAuthorized "1"				
+				# Cache configuration
+				/rules
+				{
+					#DENY
+					/0000 { /glob "*" /type "allow" }
+					/0001 { /glob "*/dam/*/auth/*" /type "deny" }
+					/0002 { /glob "*sessioncheck*" /type "deny" }
+					/0003 { /glob "*/cart-pages/*" /type "deny" }
+					/0004 { /glob "*/profile-pages/*" /type "deny" }                                        
+					/0005 { /glob "*/profile-pages/register.html" /type "allow" }
+					/0006 { /glob "*insightlisting.InsightsListing.json*" /type "deny" }
+				#	/0007 { /glob "*/funds.*.html" /type "deny" }
+					/0008 { /glob "*showcompareoverlay*" /type "deny" }
+					/0009 { /glob "*.nocache.html*" /type "deny" }
+                                        #/0009 { /glob "*.html" /type "deny" }
+                                        /0010 { /glob "*/printPage.html" /type "deny" }
+                                        /0011 { /glob "*/auth-pages/*" /type "deny" }
+				}
+				/invalidate
+				{
+					/0000 { /glob "*" /type "allow" }
+				}
+			}
+			/statistics
+			{
+				/categories
+				{
+					/html { /glob "*.html" }
+					/others { /glob "*" }
+				}
+			}
+		}
+		
+	}
+	
+

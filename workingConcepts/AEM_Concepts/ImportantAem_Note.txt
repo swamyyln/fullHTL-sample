@@ -1,0 +1,7 @@
+Sling Merger
+
+1)Overlay - depends on path search (First=/apps and second=/libs)
+
+2)Override - works with sling:resourceSuperType (need to copy entire language from libs to apps and give full /apps path)
+
+Example:http://sgaem.blogspot.com/2017/09/sling-resource-merger-in-aem-63.html

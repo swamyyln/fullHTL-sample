@@ -1,0 +1,867 @@
+package com.arche11.core.damWorkflows;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.Map.Entry;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
+
+import javax.jcr.Node;
+import javax.jcr.PathNotFoundException;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.jcr.version.Version;
+
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.jackrabbit.util.Text;
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.apache.sling.commons.mime.MimeTypeService;
+import org.apache.sling.jcr.resource.JcrResourceUtil;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.supercsv.cellprocessor.ift.CellProcessor;
+import org.supercsv.io.CsvMapReader;
+import org.supercsv.io.ICsvMapReader;
+import org.supercsv.prefs.CsvPreference;
+
+import com.adobe.granite.workflow.WorkflowException;
+import com.adobe.granite.workflow.WorkflowSession;
+import com.adobe.granite.workflow.exec.WorkItem;
+import com.adobe.granite.workflow.exec.WorkflowData;
+import com.adobe.granite.workflow.exec.WorkflowProcess;
+import com.adobe.granite.workflow.metadata.MetaDataMap;
+import com.arche11.UnarchivalFlow.CustomUnarchiverProcessConfigService;
+import com.arche11.UnarchivalFlow.MetadataCSVBean;
+import com.day.cq.dam.api.Asset;
+import com.day.cq.dam.api.AssetManager;
+import com.day.cq.replication.ReplicationActionType;
+import com.day.cq.replication.Replicator;
+import com.day.cq.tagging.Tag;
+import com.day.cq.tagging.TagManager;
+
+
+@Component(service=WorkflowProcess.class,property={"process.label=myCreateDAMAssetsFromFolder",
+        Constants.SERVICE_DESCRIPTION+"=This is my custom DAM assets creation from folder"})
+public class CreateDAMAssetsFromFolder implements WorkflowProcess {
+
+	
+	private static final Logger log=LoggerFactory.getLogger(CreateDAMAssetsFromFolder.class);
+	
+	
+	@Reference
+	ResourceResolverFactory rrf;
+	
+	@Reference
+	CustomUnarchiverProcessConfigService unarchiveConfigService;
+	
+	  @Reference
+	  private MimeTypeService mimeTypeService;
+	 
+	 @Reference
+	 private Replicator replicationService;
+	 
+	 @Reference
+	 NewcreateVersionProcessService newcreateVersionProcessService;
+
+     
+    // List<String> errorMsgs=new ArrayList<>();
+	
+	private ResourceResolver resourceResolver;
+
+	private Session jcrSession;
+	
+	private AssetManager assetManager = null;
+
+	private TagManager tagManager =null;
+	
+	private static final String SHAREPOINT_DAM_FOLDER = "/content/dam/thf/en/docs/auth";
+	
+	private static final String JCR_CONTENT_NODE = "jcr:content";
+
+	private static final String METADATA_NODE = "metadata";
+	
+	private static final String SHAREPOINT_SFTP_FOLDER="C:/Users/YE20004956/Desktop/UNARCHIVER_Process_Test/Source";
+	
+	private static final String THF_TAGS_PRODUCTS = "/etc/tags/thf/products";
+	
+	private static final String THF_TAGS_ETF = "/etfs";
+
+	private static final String THF_TAGS_FUNDS = "/funds";
+	
+	private static final String THF_TAGS_INDEXS = "/index";
+	
+	private static final String SUCCESS_FILES_ARCHIVAL_PATH="C:/Users/YE20004956/Desktop/UNARCHIVER_Process_Test/success_archive";
+	
+	private static final String ERROR_FILES_ARCHIVAL_PATH="C:/Users/YE20004956/Desktop/UNARCHIVER_Process_Test/error_archive";
+	
+	List<String> successFilesList=new ArrayList<>();
+	
+	List<String> errorFilesList=new ArrayList<>();
+	
+	  List<String> sftpFileList=new ArrayList<>();
+	  
+      List<String> csvFileList=new ArrayList<>();
+	
+	
+	@Override
+	public void execute(WorkItem workItem, WorkflowSession wfSession, MetaDataMap meadataMap) throws WorkflowException {
+
+		Map<String, Object> param = new HashMap<String, Object>();
+        param.put(ResourceResolverFactory.SUBSERVICE, "myWorkflowInvokeService");
+        
+        try {
+			ResourceResolver rr=this.rrf.getServiceResourceResolver(param);
+			
+			if(rr!=null){
+				log.info("obtained resource resolver with user name : "+rr.getUserID().toString());
+			}
+			
+			this.tagManager = rr.adaptTo(TagManager.class);
+			
+			this.assetManager = rr.adaptTo(AssetManager.class);
+			
+			//1.read csv file
+			 Map<String,MetadataCSVBean> outputFinalMap=this.readCSVFile(); 
+			 
+			 
+			 if(csvFileList!=null && csvFileList.size()>0 && sftpFileList!=null && sftpFileList.size()>0){
+				 
+				 sftpFileList.removeAll(csvFileList);
+					
+				//log.info("The file names which are present in metadata.csv and not in sftp are : "+csvFileList);	
+				log.info("The file names which are present in SFTP and not in MEATDATA : "+sftpFileList);	
+				}
+			
+			//2.createDamAssetsFromFolder
+	        try {
+	        	if(errorFilesList.size()==0){
+				this.createDamAssetsFromFolder(null,outputFinalMap,rr);
+	        	}
+	        	else{
+	        		log.info("No CSV file found");
+	        		
+	        		//send a error mail
+	        		
+	        		//Terminate the triggered workflow abruptly with proper comments
+	        		workItem.getWorkflow().getMetaDataMap().put("terminateComment", "No CSV file found swamy");
+	        		wfSession.terminateWorkflow(workItem.getWorkflow());
+	        	}
+			} catch (FileNotFoundException e) {
+				e.printStackTrace();
+			}
+	        
+	       
+		} catch (LoginException e) {
+			e.printStackTrace();
+		} catch (FileNotFoundException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}finally{
+			 if(successFilesList !=null && successFilesList.size()>0){
+		        	this.zipGenerator(SUCCESS_FILES_ARCHIVAL_PATH, SHAREPOINT_SFTP_FOLDER, true,successFilesList);
+		        }
+		        
+		        if(errorFilesList!=null && errorFilesList.size()>0){
+		        	this.zipGenerator(ERROR_FILES_ARCHIVAL_PATH, SHAREPOINT_SFTP_FOLDER, true,errorFilesList);
+		        }
+		        successFilesList.clear();
+		        errorFilesList.clear();
+		        
+		        sftpFileList.clear();
+		        csvFileList.clear();
+		        
+		}
+	}
+
+	private  Map<String,MetadataCSVBean>  readCSVFile() throws FileNotFoundException{
+		
+		  MetadataCSVBean metadataCSVBeanObj=null;
+		  List<Map<String, Object>> csvRowDataList = null;
+	      FileInputStream fis = null;
+	      Map<String,MetadataCSVBean> finalMap=new HashMap<>();
+
+	      boolean isProcessingRequired=true;
+
+	      String file=null;
+	      String fileName=null;
+	      String libraryName=null;
+	      String fundName=null;
+	      String ticker=null;
+	      String webId=null;
+	      String subAdvisor=null;
+	      String year=null;
+	      String quarter=null;
+	      String modified=null;
+	     
+	     
+		//
+		File folder = new File(SHAREPOINT_SFTP_FOLDER);
+		for(final File fileEntry:folder.listFiles()){
+			sftpFileList.add(fileEntry.getName());
+			log.info("file name : "+fileEntry.getName());
+			
+			if(isProcessingRequired){
+			if(fileEntry.getName().endsWith(".csv")){
+				
+				 try {
+					 errorFilesList.clear();
+					 isProcessingRequired=false;
+					fis = new FileInputStream(fileEntry);
+					
+                    InputStreamReader inputStreamReader = new InputStreamReader(fis);
+			        
+			        csvRowDataList = new ArrayList<Map<String, Object>>();
+			        csvRowDataList=this.readCSVRows(inputStreamReader);
+			        
+			       
+			        //int i=0;
+			        if (null != csvRowDataList && !csvRowDataList.isEmpty()) {
+						log.info("csvRowDataList is not empty");
+						// Populate funds from csv
+						for (final Map<String, Object> rowDataMap : csvRowDataList) {
+	                             //i++;
+							//log.info("Swamy your final map entry :"+ i +"=" + rowDataMap);
+	                             metadataCSVBeanObj=new MetadataCSVBean();
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("File"))) {
+	                            	 file=rowDataMap.get("File").toString();
+	                            	 metadataCSVBeanObj.setFile(file);
+	                            	 csvFileList.add(file);
+	     						}
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("FileName"))) {
+	                            	 fileName=rowDataMap.get("FileName").toString();
+	     							metadataCSVBeanObj.setFileName(fileName);
+	     						}
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("Library"))) {
+	                            	 libraryName=rowDataMap.get("Library").toString();
+	     							metadataCSVBeanObj.setLibrary(libraryName);
+	     						}
+	     						
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("FundName"))) {
+	                            	 fundName=rowDataMap.get("FundName").toString();
+	                            	 metadataCSVBeanObj.setFundName(fundName);
+	     						}
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("Ticker"))) {
+	                            	 ticker=rowDataMap.get("Ticker").toString();
+	                            	 metadataCSVBeanObj.setTicker(ticker);
+	     						}
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("WebID"))) {
+	                            	 webId=rowDataMap.get("WebID").toString();
+	                            	 metadataCSVBeanObj.setWebId(webId);
+	     						}
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("SubAdvisor"))) {
+	                            	 subAdvisor=rowDataMap.get("SubAdvisor").toString();
+	                            	 metadataCSVBeanObj.setSubAdvisor(subAdvisor);
+	     						}
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("Year"))) {
+	                            	 year=rowDataMap.get("Year").toString();
+	                            	 metadataCSVBeanObj.setYear(year);
+	     						}
+	                             if (StringUtils.isNotEmpty((String) rowDataMap
+	     								.get("Quarter"))) {
+	                            	 quarter=rowDataMap.get("Quarter").toString();
+	                            	 metadataCSVBeanObj.setQuarter(quarter);
+	     						}
+							if (StringUtils.isNotEmpty((String) rowDataMap
+									.get("Modified"))) {
+								modified=rowDataMap.get("Modified").toString();
+								metadataCSVBeanObj.setModified(modified);
+							}
+							 finalMap.put(file,metadataCSVBeanObj);
+						}
+					}
+			        
+				} catch (FileNotFoundException e) {
+					 errorFilesList.add(fileEntry.getName());
+					throw e;
+				}
+				 catch (Exception e) {
+					 errorFilesList.add(fileEntry.getName());
+						throw e;
+					}
+				 finally
+			      {
+			        IOUtils.closeQuietly(fis);
+			       
+			      }
+			        
+			} else{
+	    		  log.info("No CSV file found inside folder..so add all the files to errorList");
+	    		  errorFilesList.add(fileEntry.getName());
+	    		  log.info("Inside errorFilesList check : "+errorFilesList);
+	    	  }
+	    	  log.info("finalMap : "+finalMap);
+	    	  
+		}else{
+			log.info("Inside processing not required ....");
+		}	  
+		}
+		
+		
+		return finalMap;
+	}
+	
+	private void createDamAssetsFromFolder(File fldr,Map<String,MetadataCSVBean> csvMetadataBeanMap ,ResourceResolver rr) throws FileNotFoundException, WorkflowException{
+	 File folder = new File(SHAREPOINT_SFTP_FOLDER);
+	 Map<String,String> libraryDamLocationMap=new HashMap<>();
+	 // Map<String,String> documentWebIdMap=new HashMap<>();
+	  
+	  FileInputStream fis = null;
+	  
+	  String fileEntryfileName=null;
+	  
+	  String[] myDamLibArray=unarchiveConfigService.getTHFLibraryDocLocation();
+	    
+		    for(String myDamLibMapObj:myDamLibArray){
+		  	  String[] innerArry=myDamLibMapObj.split("=");
+		  	  log.info("After Split key = "+innerArry[0]);
+		  	  log.info("After Split value = "+innerArry[1]);
+		  	libraryDamLocationMap.put(innerArry[0], innerArry[1]);
+		    }
+	    
+		/*Map<String,String> doclibraryMap=new HashMap<>();
+		
+		for(MetadataCSVBean metadataCSVObj: csvMetadataBeanList){
+			doclibraryMap.put(metadataCSVObj.getFile(), metadataCSVObj.getLibrary());
+			documentWebIdMap.put(metadataCSVObj.getFile(), metadataCSVObj.getWebId());
+		log.info("List Details ; File :"+metadataCSVObj.getFile() +" and LibraryName :"+metadataCSVObj.getLibrary() +" and tag name : "+metadataCSVObj.getWebId());
+		}*/
+		
+		log.info("csvMetadataBeanMap size : "+csvMetadataBeanMap.size());
+	 
+	for(final File fileEntry:folder.listFiles()){
+		log.info("file entry name : [{}] ",fileEntry.getName());
+		 try {
+		if(fileEntry.isDirectory()){
+			log.info("file entry is directory with path : [{}] ",fileEntry.getName());
+		}else{
+			     // eliminate csv file upload
+			if(!fileEntry.getName().endsWith(".csv")){
+			fileEntryfileName=fileEntry.getName();
+			
+			log.info("1. file name = "+ fileEntryfileName);
+			log.info("2. corresponding library name = "+ csvMetadataBeanMap.get(fileEntryfileName).getLibrary());
+			log.info("3. corresponding dam location = "+ libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary()));
+			log.info("For file name = "+ fileEntryfileName +" libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary()) : "+ libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary()));
+			
+			if(null!=libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary())){
+			String fullPathWithFileName = libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary())+"/"+fileEntryfileName;
+			
+			 Resource resource = rr.getResource(fullPathWithFileName);
+	          Asset targetAsset = null;
+			 if ((null != resource) && (null != (targetAsset = (Asset)resource.adaptTo(Asset.class))))
+	          {
+	            log.info("Resource already exists..!!!");
+	          }
+			   fis = new FileInputStream(fileEntry);
+	          String mimeType = this.mimeTypeService.getMimeType(fileEntryfileName);
+	          
+	          if (null != targetAsset)
+	          {
+	            Asset newAsset = targetAsset.addRendition("original", fis, mimeType).getAsset();
+	      
+	            	 log.info("Inside create version loop");
+	          
+	            this.updateDocumentMetadata(targetAsset, csvMetadataBeanMap, fileEntryfileName, rr);
+	            
+	            final Node uploadedAssetNode = targetAsset.adaptTo(Node.class);
+	            
+	            this.replicationService.replicate(uploadedAssetNode.getSession(),ReplicationActionType.ACTIVATE,uploadedAssetNode.getPath());
+	            
+	            newcreateVersionProcessService.createCustomVersionService(uploadedAssetNode.getPath());
+	            
+	            log.info("updated existing asset [{}] from entry [{}]", newAsset.getPath(),fileEntryfileName);
+	            
+	            successFilesList.add(fileEntryfileName);
+	          }
+	          else
+	          {
+	        	    Asset newAsset = this.getAssetManager().createAsset(fullPathWithFileName, fis, mimeType, true);
+	                if (null != newAsset)
+	                {
+	                	 
+	                	 final Node uploadedAssetNode = newAsset.adaptTo(Node.class);
+	                	 this.updateDocumentMetadata(newAsset, csvMetadataBeanMap, fileEntryfileName, rr);
+	                	 
+	                	 log.info("Uploaded asset node path before publishing path : "+uploadedAssetNode.getPath() +"with session :"+uploadedAssetNode.getSession().getUserID());
+	                	 this.replicationService.replicate(uploadedAssetNode.getSession(),ReplicationActionType.ACTIVATE,uploadedAssetNode.getPath());
+	                	
+	                  log.info("extractEntry: created new asset [{}] from entry [{}]", newAsset.getPath(), fileEntryfileName);
+	                  successFilesList.add(fileEntryfileName);
+	                }
+	                else
+	                {
+	                  log.error("extractEntry: asset manager couldn't create asset for entry [{}]", fileEntryfileName);
+	                  throw new WorkflowException("Asset manager couldn't create asset for entry " + fileEntryfileName);
+	                }
+	          }
+			}
+			else{
+				log.info("There is no DAM location mapping for file name :"+fileEntry.getName());
+				errorFilesList.add(fileEntry.getName());
+			}
+			}else{
+				log.info("Since it is CSV file no DAM upload required");
+				successFilesList.add(fileEntry.getName());
+			}
+
+		}
+		 }catch(Exception e){
+			 errorFilesList.add(fileEntryfileName);
+			 log.info("***** exception "+e.getMessage() +e.getCause());
+			 e.printStackTrace();
+			
+		 } finally
+	      {
+		        IOUtils.closeQuietly(fis);
+		   }
+	}
+	}
+	
+	
+	
+	private List<Map<String, Object>> readCSVRows(InputStreamReader reader) {
+
+		List<Map<String, Object>> csvRowsList = new ArrayList<Map<String, Object>>();
+		ICsvMapReader mapReader = null;
+		try {
+			mapReader = new CsvMapReader(reader,
+					CsvPreference.STANDARD_PREFERENCE);
+
+			// the header columns are used as the keys to the Map
+			final String[] header = mapReader.getHeader(true);
+			log.info("readCSVRows after processing cell");
+			Map<String, Object> rowMetaDataMap;
+			CellProcessor[] migrationProcessor = getMigrationProcessor(header.length);
+			while ((rowMetaDataMap = mapReader.read(header, migrationProcessor)) != null) {
+
+				csvRowsList.add(rowMetaDataMap);
+			}
+		} catch (Exception exception) {
+			log.info("readCSVRows Exception occurred : "+ exception);
+		} finally {
+			if (mapReader != null) {
+				try {
+					mapReader.close();
+					reader.close();
+				} catch (IOException ioException) {
+					log.info("readCSVRows Exception occurred : "+ ioException);
+				}
+			}
+		}
+		return csvRowsList;
+	}
+	
+	private static CellProcessor[] getMigrationProcessor(int colCount) {
+
+		final CellProcessor[] migrationProcessors = new CellProcessor[colCount];
+		for (int i = 0; i < migrationProcessors.length; i++) {
+			migrationProcessors[i] = null;
+		}
+		return migrationProcessors;
+	}
+
+	private static  boolean checkForCSVFile(String fileName)
+	  {
+	      if (null!=fileName && fileName.length()>0 && fileName.contains(".csv")) {
+	        return true;
+	      }
+	    
+	    return false;
+	  }
+
+	 
+	 private AssetManager getAssetManager()
+	    {
+	      return this.assetManager;
+	    }
+	 
+	 private TagManager getTagManager()
+	    {
+	      return this.tagManager;
+	    }
+	 
+	 
+	 private  boolean updateDocumentMetadata(Asset newAsset,Map<String,MetadataCSVBean> csvMetadataBeanMap,String fileEntryfileName,ResourceResolver rr){
+			log.info("Inside updateDocumentMetadata method");
+			
+		 boolean isMetadataUpdated=false;
+	     final String DDMMYYYY_FORMAT = "dd-MM-yyyy HH:mm:ss";
+	     
+	     final String MMDDYYYY_PATTERN = "^([0]?[1-9]|[1][0-2])[/]([0]?[1-9]|"
+	 			+ "[1|2][0-9]|[3][0|1])[/]([0-9]{4}|[0-9]{2})$";
+	     final String MMDDYYYY_FORMAT = "MM/dd/yyyy HH:mm:ss aa";
+	     final Pattern mmddyyyyPattern = Pattern.compile(MMDDYYYY_PATTERN);
+			Matcher dateMatcherMMDDYYYY = null;
+			
+			SimpleDateFormat sdfMMDDYYYY = new SimpleDateFormat(MMDDYYYY_FORMAT);
+	     
+	     //SimpleDateFormat sdf = new SimpleDateFormat("MM/dd/yyyy HH:mm:ss");
+	 
+	     
+		 Tag resolvedTag = null;
+		
+		 final Calendar dateCalanderValue = Calendar.getInstance();
+		 
+		 String[] multiWebIdStr=null;
+		 final List<String> tagsList=new ArrayList<>();
+		 TagManager tagManager=this.getTagManager();
+		 
+		 String webIdStr=csvMetadataBeanMap.get(fileEntryfileName).getWebId();
+		 log.info("webIdStr : "+webIdStr);
+		 
+		 try {
+		 if(StringUtils.isNotEmpty(webIdStr)){
+			 if(webIdStr.contains(";")){
+			 multiWebIdStr=webIdStr.split( ";");
+			 for(String tag:multiWebIdStr){
+				 log.info(tag);
+				 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_ETF+"/"+tag.toLowerCase());
+				 
+				 if (null != resolvedTag) {
+					log.info("resolved tag path : "+resolvedTag.getTagID());
+						tagsList.add(resolvedTag.getTagID());
+					}
+				 else{
+					 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_FUNDS+"/"+tag.toLowerCase());
+					 if(null!=resolvedTag){
+						 log.info("resolved tag path : "+resolvedTag.getTagID());
+						 tagsList.add(resolvedTag.getTagID());
+					 }
+					 else{
+						 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_INDEXS+"/"+tag.toLowerCase());
+						 if(null!=resolvedTag){
+							 log.info("resolved tag path : "+resolvedTag.getTagID());
+							 tagsList.add(resolvedTag.getTagID());
+						 }
+						 else{
+							 log.info("Inside myelse for csv webId :"+tag);
+							 tagsList.add("");
+						 }
+					 }
+				 }
+			 }
+			 }else{
+				 log.info("Inside else for file name :" +fileEntryfileName);
+				 log.info("tag resolution path :"+THF_TAGS_PRODUCTS+THF_TAGS_ETF+"/"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+				 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_ETF+"/"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+				
+				 if (null != resolvedTag) {
+					 log.info("resolved tag name :"+resolvedTag.getPath());
+					log.info("resolved tag path : "+resolvedTag.getTagID());
+						tagsList.add(resolvedTag.getTagID());
+					}else{
+						 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_FUNDS+"/"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+						 if(null!=resolvedTag){
+							 log.info("resolved tag path : "+resolvedTag.getTagID());
+							 tagsList.add(resolvedTag.getTagID());
+						 }
+							else{
+								 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_INDEXS+"/"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+								 if(null!=resolvedTag){
+									 log.info("resolved tag path : "+resolvedTag.getTagID());
+									 tagsList.add(resolvedTag.getTagID());
+								 }
+								 else{
+									 log.info("Inside myelse for csv webId :"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+									 tagsList.add("");
+								 }
+							 }
+
+						 
+					 }
+			 
+			 }
+		 }
+		   final Node newAssetNode = newAsset.adaptTo(Node.class);
+	
+		
+			if (null != newAssetNode && newAssetNode.hasNode(JCR_CONTENT_NODE+ "/"+ METADATA_NODE)) {
+				Node newAssetMetaDataNode = newAssetNode.getNode(JCR_CONTENT_NODE+ "/"+ METADATA_NODE);
+				
+				//1.Set the document tags
+				if (!tagsList.isEmpty() && tagsList.size()>0) { 									 	
+					log.info("Setting cq:tags [{}] to cq:tags", tagsList);
+			   this.setProperty(newAssetMetaDataNode, "cq:tags",tagsList.toArray(), true);
+								   isMetadataUpdated=true;
+				}else{
+					 this.setProperty(newAssetMetaDataNode, "cq:tags","", true);
+					log.info("No tag set for asset : "+newAssetMetaDataNode.getName());
+					
+				}
+				
+				//2.set the "File"  as metadata property Name
+				if(null!=csvMetadataBeanMap.get(fileEntryfileName).getFile() && StringUtils.isNotEmpty(csvMetadataBeanMap.get(fileEntryfileName).getFile())){
+					
+					log.info("Before setting metadata property name = "+ csvMetadataBeanMap.get(fileEntryfileName).getFile());
+					 this.setProperty(newAssetMetaDataNode, "name",csvMetadataBeanMap.get(fileEntryfileName).getFile(), true);
+					 
+					//3.set the "File" with out extension as metadata Property piececode
+					String file=csvMetadataBeanMap.get(fileEntryfileName).getFile();
+					if(null!=file && file.contains(".")){
+					String pieceCode=file.substring(0, file.lastIndexOf('.'));
+					log.info("Before setting metadata property piececode = "+ pieceCode);
+					 this.setProperty(newAssetMetaDataNode, "piececode",pieceCode, true);
+					}else{
+						this.setProperty(newAssetMetaDataNode, "piececode","", true);
+					}
+				
+				}else{
+					this.setProperty(newAssetMetaDataNode, "name","", true);
+				}
+				
+				//4. dc:title
+				if(null !=csvMetadataBeanMap.get(fileEntryfileName).getFileName() && StringUtils.isNotEmpty(csvMetadataBeanMap.get(fileEntryfileName).getFileName())){
+					 this.setProperty(newAssetMetaDataNode, "dc:title",csvMetadataBeanMap.get(fileEntryfileName).getFileName(), true);
+				}else{
+					if(newAssetMetaDataNode.getName()!=null){
+					this.setProperty(newAssetMetaDataNode, "dc:title",newAssetNode.getName(), true);
+					}
+					else{
+						this.setProperty(newAssetMetaDataNode, "dc:title","", true);
+					}
+				}
+
+				//5.Revision Date
+			       String strRevisonDate =csvMetadataBeanMap.get(fileEntryfileName).getModified();
+				log.info("for file name : "+csvMetadataBeanMap.get(fileEntryfileName).getFile() +" --> strRevisonDate : "+strRevisonDate );
+				Date revisonDate = null;
+
+				//outputDate = outputformat.format(strRevisonDate);
+				// Add Revision Date - prism:revisionDate
+				if (StringUtils.isNotEmpty(strRevisonDate)) {
+					   
+					dateMatcherMMDDYYYY = mmddyyyyPattern.matcher(strRevisonDate);
+					
+					if (dateMatcherMMDDYYYY.find()) {
+						revisonDate = sdfMMDDYYYY.parse(strRevisonDate);
+						log.info("revisonDate --> {}",revisonDate);
+						dateCalanderValue.setTime(revisonDate);
+						log.info("dateCalanderValue --> {}",dateCalanderValue.getTime());
+						log.info("before setting prism revision date : "+dateCalanderValue.getTimeInMillis() +"System Time in Millis :"+System.currentTimeMillis());
+						this.setProperty(newAssetMetaDataNode,"prism:revisionDate", dateCalanderValue, true);
+					}
+						
+				}else{
+				log.info("Setting value1 [{}]  to property prism:revisionDate empty");
+			    this.setProperty(newAssetMetaDataNode,"prism:revisionDate", "", true);
+				}
+				
+			} 
+			else {
+					log.info("No metadata node found for asset : "+newAssetNode.getName());
+				}
+		
+		
+		
+	 } catch (RepositoryException | ParseException parseExcep) {
+			errorFilesList.add(fileEntryfileName);
+		}
+		 return isMetadataUpdated;
+	 }
+	 
+	 private boolean setProperty(final Node node, final String name,
+	            final Object value, final boolean autoSave) {
+	        try {
+	            JcrResourceUtil.setProperty(node, name, value);
+	            if (autoSave) {
+	                this.save(node.getSession());
+	            }
+	            return true;
+	        } catch (final NullPointerException e) {
+	           log.info("Could not set property: {}", e);
+	        } catch (final RepositoryException e) {
+	        	log.info("Could not set property: {}", e);
+	        }
+	        return false;
+	    }
+	 
+	 private void save(final Session session) {
+	        try {
+	            if (session != null && session.hasPendingChanges()) {
+	                session.refresh(true);
+	                session.save();
+	            }
+	        } catch (final RepositoryException e) {
+	            log.info("Could not save session: ", e);
+	        }
+	    }
+	 
+	 ///File Utils
+	 private void zipGenerator(String acrhivalPath, final String sourceDir, boolean moveFile,List<String> filesList) {
+	    	File fileSource = null;
+	        try {
+	            // create object of FileOutputStream
+	            acrhivalPath = acrhivalPath + File.separator;
+	            // create File object from source directory
+	            fileSource = new File(sourceDir);
+	            final FileOutputStream fout = new FileOutputStream(acrhivalPath
+	                    + getCurrentDate());
+	            // create object of ZipOutputStream from FileOutputStream
+	            final ZipOutputStream zout = new ZipOutputStream(fout);
+	            addDirectory(zout, fileSource,filesList);
+	            // close the ZipOutputStream
+	            zout.close();
+	        } catch (final IOException ioe) {
+	            log.info("IOException :" + ioe);
+			} finally {
+				if (fileSource != null && fileSource.exists()
+						&& fileSource.isFile() && moveFile) {
+					
+					if(filesList.contains(fileSource.getName())){
+					boolean status = fileSource.delete();
+					log.info(
+							"File deletion status for file [{}]: {}",
+							fileSource.getAbsolutePath(), status);
+					}
+				} else if (fileSource != null && fileSource.exists()
+						&& fileSource.isDirectory() && moveFile) {
+					
+					log.info("Inside else if");
+					
+					
+					for (File file : fileSource.listFiles()) {
+						
+						if(filesList.contains(file.getName())){
+						boolean status = file.delete();
+						log.info(
+								"File deletion status for file [{}]: {}",
+								file.getAbsolutePath(), status);
+						
+						}
+					}
+					
+				}
+			}
+	    }
+	 
+	 
+	 
+	 private static void addDirectory(final ZipOutputStream zout,
+	            final File fileSource,List<String> myFilesList) {
+
+		List<File> finalFilesList = new ArrayList<>();
+	        // get sub-folder/files list
+	        final File[] files = fileSource.listFiles();
+	        
+	        
+	        for(int j=0; j<files.length; j++){
+	        	for(int k=0;k<myFilesList.size();k++){
+	        		if(files[j].getName().equalsIgnoreCase(myFilesList.get(k))){
+	        			finalFilesList.add(files[j]);
+	        		}
+	        	}
+	       // File[] finalFilesArry
+	        }
+
+	        if(finalFilesList.size()>0){
+	        for (int i = 0; i < finalFilesList.size(); i++) {
+	            // if the file is directory, call the function recursively
+	            if (finalFilesList.get(i).isDirectory()) {
+	                addDirectory(zout, finalFilesList.get(i),myFilesList);
+	                continue;
+	            }
+
+	            /*
+	             * we are here means, its file and not directory, so
+	             * add it to the zip file
+	             */
+
+	            try {
+
+	                // create byte buffer
+	                final byte[] buffer =returnByteArray();
+	                // create object of FileInputStream
+	                final FileInputStream fin = returnFileInputStream(finalFilesList.get(i));
+
+	                zout.putNextEntry(returnZipEntryObj(finalFilesList.get(i)
+	                        .getName()));
+
+	                /*
+	                 * After creating entry in the zip file, actually
+	                 * write the file.
+	                 */
+	                int length;
+
+	                while ((length = fin.read(buffer)) > 0) {
+	                    zout.write(buffer, 0, length);
+	                }
+
+	                /*
+	                 * After writing the file to ZipOutputStream, use
+	                 * void closeEntry() method of ZipOutputStream class to
+	                 * close the current entry and position the stream to
+	                 * write the next entry.
+	                 */
+
+	                zout.closeEntry();
+
+	                // close the InputStream
+	                fin.close();
+
+	            } catch (final IOException ioe) {
+	                log.info("IOException :" + ioe);
+	            }
+	        }
+	 }else{
+		 log.info("No file found to zip");
+	 }
+	    }
+	 
+	 
+	 private static byte[] returnByteArray() {
+	        return new byte[1024];
+	    }
+	 
+	 private static FileInputStream returnFileInputStream(final File file)
+	            throws FileNotFoundException {
+	        // create byte buffer
+	        return new FileInputStream(file);
+	    }
+	 
+	 private static ZipEntry returnZipEntryObj(final String fileName) {
+	        // create byte buffer
+	        return new ZipEntry(fileName);
+	    }
+
+	    private static String getCurrentDate() {
+	        return new SimpleDateFormat("yyyy_MM_dd_hhmm'.zip'", Locale.US)
+	                .format(new Date());
+	    }
+}

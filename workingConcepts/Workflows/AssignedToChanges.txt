@@ -1,0 +1,27 @@
+
+/apps/cq/gui/components/common/admin/timeline/events/workflow/wfassignee.jsp
+
+/apps/cq/gui/components/common/admin/timeline/events/workflow/toolbar.jsp
+
+/apps/cq/gui/components/common/admin/timeline/events/workflow/dsWfassignee.jsp
+
+
+1) For pages --> time line ---> Start workflow --->Navigating to bulk workflow page with below
+
+"href":"/mnt/override/libs/wcm/core/content/common/startbulkworkflows.html{?item*}"
+
+
+FOR ASSETS
+
+/libs/dam/gui/coral/content/commons/sidepanels/timeline/items/toolbar/items/workflows/items/form/items/workflowtitle
+
+
+For Pages
+
+/libs/wcm/core/content/sites/jcr:content/rails/timeline/items/timeline/items/toolbar/items/workflows/data
+
+[href.uritemplate]
+
+/apps/cq/gui/components/authoring/workflow/startworkflow/startworkflow.jsp
+
+/mnt/override/libs/wcm/core/content/common/startbulkworkflows.html{?item*}

@@ -1,0 +1,18 @@
+
+
+get the zip input stream from C:drive (tobeProccessed folder)
+
+unarchive it
+
+extract each entry
+
+check if asset exists or not{
+if exists upload the asset and update metadata and  create version
+else (upload the new asset and update metadata and create version)
+}
+
+replicate it publish
+
+(once it is success move zip to processed folder)
+
+if any error move to error folder

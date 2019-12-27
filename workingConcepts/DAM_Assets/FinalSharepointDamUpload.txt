@@ -1,0 +1,1197 @@
+package com.thehartford.thf.workflows;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.FilenameFilter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import javax.jcr.Node;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+
+import org.apache.commons.collections.MapUtils;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Properties;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.Service;
+import org.apache.sling.api.SlingException;
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.apache.sling.commons.mime.MimeTypeService;
+import org.apache.sling.jcr.resource.JcrResourceUtil;
+import org.osgi.framework.Constants;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.supercsv.cellprocessor.ift.CellProcessor;
+import org.supercsv.io.CsvMapReader;
+import org.supercsv.io.ICsvMapReader;
+import org.supercsv.prefs.CsvPreference;
+
+import com.day.cq.dam.api.Asset;
+import com.day.cq.dam.api.AssetManager;
+import com.day.cq.dam.commons.process.AbstractAssetWorkflowProcess;
+import com.day.cq.replication.ReplicationActionType;
+import com.day.cq.replication.ReplicationException;
+import com.day.cq.replication.Replicator;
+import com.day.cq.tagging.Tag;
+import com.day.cq.tagging.TagManager;
+import com.day.cq.workflow.WorkflowException;
+import com.day.cq.workflow.WorkflowSession;
+import com.day.cq.workflow.exec.Route;
+import com.day.cq.workflow.exec.WorkItem;
+import com.day.cq.workflow.exec.WorkflowProcess;
+import com.day.cq.workflow.metadata.MetaDataMap;
+import com.thehartford.thf.core.common.vo.ConfigurationServiceVO;
+import com.thehartford.thf.core.configmanagement.ConfigService;
+import com.thehartford.thf.core.configmanagement.CreateCustomVersionService;
+import com.thehartford.thf.core.configmanagement.SharepointConfigServcie;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.mail.GenericMailConfiguration;
+import com.thehartford.thf.core.mail.GenericMailService;
+import com.thehartford.thf.core.mail.impl.MailConstants;
+import com.thehartford.thf.core.scheduler.GenericSynthesisConfiguration;
+import com.thehartford.thf.core.scheduler.GenericSynthesisService;
+import com.thehartford.thf.core.scheduler.impl.SchedulerConstants;
+import com.thehartford.thf.core.util.MailUtils;
+import com.thehartford.thf.csv.exception.ApplicationRuntimeException;
+import com.thehartford.thf.dtos.SharepointMetadataBean;
+import com.thehartford.thf.integration.ftp.constant.FTPConstants;
+import com.thehartford.thf.ui.services.AdminSessionService;
+
+@Component
+@Service
+@Properties({
+		@Property(name = Constants.SERVICE_DESCRIPTION, value = "THF Sharepoint Sync Workflow process"),
+		@Property(name = Constants.SERVICE_VENDOR, value = "Wipro"),
+		@Property(name = "process.label", value = "THF Sharepoint Sync Workflow process") })
+public class THFSharePointSyncWorkflowProcess extends AbstractAssetWorkflowProcess
+implements WorkflowProcess {
+
+
+	
+	private static final Logger log=LoggerFactory.getLogger(THFSharePointSyncWorkflowProcess.class);
+	
+	
+	@Reference
+	ResourceResolverFactory rrf;
+	
+	@Reference
+	private AdminSessionService adminsession;
+	
+	@Reference
+	SharepointConfigServcie sharepointConfigServcie;
+	
+	  @Reference
+	  private MimeTypeService mimeTypeService;
+	 
+	 @Reference
+	 private Replicator replicationService;
+	 
+	 @Reference
+	 CreateCustomVersionService createCustomVersionService;
+	 
+	 @Reference
+		private transient GenericSynthesisService genericSynthesisService;
+	
+	 
+	 public ConfigurationServiceVO configurationServiceVO = null;
+	 
+	 @Reference
+	 private transient SynthesisWorkflowService synthesisWorkflowService;
+	 
+	 @Reference
+		private ConfigService configService;
+	 
+	 @Reference
+		private GenericMailService mailService;
+	
+	private ResourceResolver rr;
+
+	private Session jcrSession;
+	
+	private AssetManager assetManager = null;
+
+	private TagManager tagManager =null;
+	
+	private static final String JCR_CONTENT_NODE = "jcr:content";
+
+	private static final String METADATA_NODE = "metadata";
+	
+	private static final String THF_TAGS_PRODUCTS = "/etc/tags/thf/products";
+	
+	private static final String THF_TAGS_ETF = "/etfs";
+
+	private static final String THF_TAGS_FUNDS = "/funds";
+	
+	private static final String THF_TAGS_INDEXS = "/index";
+	
+	private static final String SHAREPOINT_SFTP_FOLDER="C:/Users/YE20004956/Desktop/UNARCHIVER_Process_Test/Source";
+	
+	private static final String SUCCESS_FILES_ARCHIVAL_PATH="C:/Users/YE20004956/Desktop/UNARCHIVER_Process_Test/success_archive";
+	
+	private static final String ERROR_FILES_ARCHIVAL_PATH="C:/Users/YE20004956/Desktop/UNARCHIVER_Process_Test/error_archive";
+	
+	List<String> successFilesList=new ArrayList<>();
+	
+	List<String> errorFilesList=new ArrayList<>();
+	
+	  List<String> sftpFileList=new ArrayList<>();
+	  
+      List<String> csvFileList=new ArrayList<>();
+      
+      List<String> noDamMappingList=new ArrayList<>();
+	
+	
+	@Override
+	public void execute(WorkItem workItem, WorkflowSession wfSession, MetaDataMap meadataMap) throws WorkflowException {
+
+		
+		List<String> assetsPathsToReplicate=new ArrayList<String>();
+		boolean isCsvFileNotfound=false;
+ 		Map<String, Object> param = new HashMap<String, Object>();
+        param.put(ResourceResolverFactory.SUBSERVICE, "myWorkflowInvokeService");
+        
+        try {
+        	
+                rr= adminsession.getAdministrativeResourceResolver();
+			
+			if(rr!=null){
+				LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"obtained resource resolver with user name : "+this.rr.getUserID().toString());
+			}
+			
+			
+			//1.read csv file
+			 Map<String,SharepointMetadataBean> outputFinalMap=this.readCSVFile(); 
+			 
+			//2.createDamAssetsFromFolder
+	        try {
+	        	if(errorFilesList.size()==0 && MapUtils.isNotEmpty(outputFinalMap)){
+	        		assetsPathsToReplicate=this.createDamAssetsFromFolder(null,outputFinalMap);
+				
+				   //to send mail for orphan SFTP images whose entry not found in metadata.csv
+				LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"csvFileList :==> "+csvFileList);
+				LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"sftpFileList :==> "+sftpFileList);
+				 if(csvFileList!=null && csvFileList.size()>0 && sftpFileList!=null && sftpFileList.size()>0){
+					 
+					 csvFileList.removeAll(sftpFileList);
+					//LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"The file names which are present in metadata.csv and not in sftp are : "+csvFileList);	
+					 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"The file names which are present in metadata file and not in SFTP are : "+ csvFileList);	
+					}
+	        	}else if(errorFilesList.size()==0 && MapUtils.isEmpty(outputFinalMap)){
+	        		this.sendNoFileToProcessMail("Sharepoint DAM Upload Process Triggered", "No Files found inside SFTP folder with location : "+sharepointConfigServcie.getLocalDir());
+	        	}
+	        	else{
+	        		LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"No CSV file found");
+	        		isCsvFileNotfound=true;
+	        		//send a error mail
+	        		this.sendFailureMail("Sharepoint DAM Upload process Failed","No CSV file found inside folder in "+sharepointConfigServcie.getLocalDir()+ " .All Files moved to Error Archive folder");
+	        		//Terminate the triggered workflow abruptly with proper comments
+	        		workItem.getWorkflow().getMetaDataMap().put("terminateComment", "No CSV file found");
+	        		wfSession.terminateWorkflow(workItem.getWorkflow());
+	        	}
+			} catch (FileNotFoundException fnfe) {
+				fnfe.printStackTrace();
+				LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"Inside execute method FileNotFoundException block fnfe {}",fnfe);
+			}
+	        
+	       
+		} catch (LoginException e1) {
+			LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"Inside execute method LoginException block e1 {}",e1);
+			e1.printStackTrace();
+		} catch (FileNotFoundException e2) {
+			LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"Inside execute method FileNotFoundException e2 {}",e2);
+			e2.printStackTrace();
+		} catch (Exception e3) {
+			workItem.getWorkflow().getMetaDataMap().put("terminateComment",e3.getMessage());
+    		wfSession.terminateWorkflow(workItem.getWorkflow());
+			LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"Inside execute method Exception e3 {}",e3);
+			e3.printStackTrace();
+		}finally{
+			  if(!isCsvFileNotfound){
+				if((null!=assetsPathsToReplicate && assetsPathsToReplicate.size()>0) ||
+						 (null!=errorFilesList && errorFilesList.size()>0) ||
+				               (null!=csvFileList && csvFileList.size()>0) || (null!=noDamMappingList && noDamMappingList.size()>0)){
+	        	this.sendEmail("Sharepoint DAM Files Upload Status",assetsPathsToReplicate,errorFilesList,csvFileList,noDamMappingList);
+				}
+	        	   }
+			 if(successFilesList !=null && successFilesList.size()>0){
+				    //put paths in meatdata for replication queue
+				   if(null!=assetsPathsToReplicate && assetsPathsToReplicate.size()>0){ 
+					   workItem.getWorkflowData().getMetaDataMap().put("thfAssetPathsToReplicate", assetsPathsToReplicate.toArray());
+					   //this.sendEmail("Sharepoint DAM Files Uploaded succesfully ",assetsPathsToReplicate,csvFileList,true);
+				   }
+		        	this.zipGenerator(sharepointConfigServcie.getSuccessArchivePath(), sharepointConfigServcie.getLocalDir(), true,successFilesList,true);
+		        }
+		        if(errorFilesList!=null && errorFilesList.size()>0){
+		        	this.zipGenerator(sharepointConfigServcie.getErrorArchivePath(), sharepointConfigServcie.getLocalDir(), true,errorFilesList,false);
+		        }
+		        successFilesList.clear();
+		        errorFilesList.clear();
+		        
+		        noDamMappingList.clear();
+		        
+		        sftpFileList.clear();
+		        csvFileList.clear();
+		        
+		       if(this.rr!=null && this.rr.isLive()){
+		    	   this.rr.close();
+		       }
+		        
+		}
+	}
+
+	private  Map<String,SharepointMetadataBean>  readCSVFile() throws Exception{
+		
+		  SharepointMetadataBean SharepointMetadataBeanObj=null;
+		  List<Map<String, Object>> csvRowDataList = null;
+	      FileInputStream fis = null;
+	      Map<String,SharepointMetadataBean> finalMap=new HashMap<>();
+
+	      boolean isProcessingRequired=true;
+
+	      String file=null;
+	      String fileName=null;
+	      String libraryName=null;
+	      String fundName=null;
+	      String ticker=null;
+	      String webId=null;
+	      String subAdvisor=null;
+	      String year=null;
+	      String quarter=null;
+	      String modified=null;
+	     
+	     //FTP Download code start
+	      
+	  	if (this.sharepointConfigServcie != null) {
+	  		LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Config values :" +sharepointConfigServcie.getHost()+
+							sharepointConfigServcie.getPort()+
+							sharepointConfigServcie.getUserName()+ 
+							sharepointConfigServcie.getPassword()+
+							sharepointConfigServcie.getRemoteDir()+
+							sharepointConfigServcie.getLocalDir()+
+							sharepointConfigServcie.getFilePattern());
+			String ftpdownloadStatus = this.synthesisWorkflowService
+					.invokeFTPService(FTPConstants.SHAREPOINTFOLDERDOWNLOAD, null,
+							sharepointConfigServcie.getHost(),
+							sharepointConfigServcie.getPort(),
+							sharepointConfigServcie.getUserName(), 
+							sharepointConfigServcie.getPassword(),
+							sharepointConfigServcie.getRemoteDir(), 
+							sharepointConfigServcie.getLocalDir(),
+							sharepointConfigServcie.getFilePattern());
+			LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,
+					"readCSVFile() : ftpdownloadStatus is found to be :"
+							+ ftpdownloadStatus);
+	
+			if (FTPConstants.SUCCESS.equals(ftpdownloadStatus)) {
+				
+				File folder = new File(sharepointConfigServcie.getLocalDir());
+				
+				File targetCSVFile=this.metdataCSVFilefinder(folder);
+				
+					if(null!=targetCSVFile && targetCSVFile.getName().endsWith(".csv")){
+						
+						 try {
+							 errorFilesList.clear();
+							 isProcessingRequired=false;
+							fis = new FileInputStream(targetCSVFile);
+							
+		                    InputStreamReader inputStreamReader = new InputStreamReader(fis);
+					        
+					        csvRowDataList = new ArrayList<Map<String, Object>>();
+					        
+					        List<String> myColumnHeaderList=Arrays.asList(sharepointConfigServcie.getCsvColumnHeaderNames());
+					        csvRowDataList=this.readCSVRows(inputStreamReader,myColumnHeaderList);
+					        
+					        if (null != csvRowDataList && !csvRowDataList.isEmpty()) {
+					        	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"csvRowDataList is not empty");
+								for (final Map<String, Object> rowDataMap : csvRowDataList) {
+			                            
+			                             SharepointMetadataBeanObj=new SharepointMetadataBean();
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("File"))) {
+			                            	 file=rowDataMap.get("File").toString();
+			                            	 SharepointMetadataBeanObj.setFile(file);
+			                            	 csvFileList.add(file);
+			     						}
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("FileName"))) {
+			                            	 fileName=rowDataMap.get("FileName").toString();
+			     							SharepointMetadataBeanObj.setFileName(fileName);
+			     						}
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("Library"))) {
+			                            	 libraryName=rowDataMap.get("Library").toString();
+			     							SharepointMetadataBeanObj.setLibrary(libraryName);
+			     						}
+			     						
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("FundName"))) {
+			                            	 fundName=rowDataMap.get("FundName").toString();
+			                            	 SharepointMetadataBeanObj.setFundName(fundName);
+			     						}
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("Ticker"))) {
+			                            	 ticker=rowDataMap.get("Ticker").toString();
+			                            	 SharepointMetadataBeanObj.setTicker(ticker);
+			     						}
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("WebID"))) {
+			                            	 webId=rowDataMap.get("WebID").toString();
+			                            	 SharepointMetadataBeanObj.setWebId(webId);
+			     						}else{
+			     							webId="";
+			     						}
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("SubAdvisor"))) {
+			                            	 subAdvisor=rowDataMap.get("SubAdvisor").toString();
+			                            	 SharepointMetadataBeanObj.setSubAdvisor(subAdvisor);
+			     						}
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("Year"))) {
+			                            	 year=rowDataMap.get("Year").toString();
+			                            	 SharepointMetadataBeanObj.setYear(year);
+			     						}
+			                             if (StringUtils.isNotEmpty((String) rowDataMap
+			     								.get("Quarter"))) {
+			                            	 quarter=rowDataMap.get("Quarter").toString();
+			                            	 SharepointMetadataBeanObj.setQuarter(quarter);
+			     						}
+									if (StringUtils.isNotEmpty((String) rowDataMap
+											.get("Modified"))) {
+										modified=rowDataMap.get("Modified").toString();
+										SharepointMetadataBeanObj.setModified(modified);
+									}
+									 finalMap.put(file,SharepointMetadataBeanObj);
+								}
+							}
+					        
+						} catch (FileNotFoundException fnfe) {
+							 errorFilesList.add(file);
+						LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"Exception in readCSVFile()..Inside FileNotFoundException block");
+							throw fnfe;
+						}
+						 catch (Exception e) {
+							 File[] listOfCsvFiles=folder.listFiles();
+				    		  for(File fle:listOfCsvFiles){
+				    		  errorFilesList.add(fle.getName());
+				    		  }
+						    LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"Exception in readCSVFile()..Inside Exception block");
+							  throw e;
+							}
+						 finally
+					      {
+					        IOUtils.closeQuietly(fis);
+					       
+					      }
+					        
+					} else{
+						LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"No CSV file found inside folder..so add all the files to errorList");
+			    		  File[] listOfCsvFiles=folder.listFiles();
+			    		  for(File fle:listOfCsvFiles){
+			    		  errorFilesList.add(fle.getName());
+			    		  }
+			    		  LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside errorFilesList check : "+errorFilesList);
+			    	  }
+					LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"finalMap : "+finalMap);
+				
+			}
+			else{
+				finalMap=null;
+				LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"There are no Files present in SFTP location (OR) SFTP download status is not success");
+			}
+			}else{
+				LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"No Sharepoint config service present");
+			}
+	      //FTP Download code END
+		
+		return finalMap;
+	}
+	
+	private List<String> createDamAssetsFromFolder(File fldr,Map<String,SharepointMetadataBean> csvMetadataBeanMap) throws FileNotFoundException, WorkflowException{
+	 File folder = new File(sharepointConfigServcie.getLocalDir());
+	 Map<String,String> libraryDamLocationMap=new HashMap<>();
+	 
+	 List<String> createdAssetPathsList=new ArrayList<String>();
+	    this.tagManager = this.rr.adaptTo(TagManager.class);
+		
+		this.assetManager = this.rr.adaptTo(AssetManager.class);
+	  
+	  FileInputStream fis = null;
+	  
+	  String fileEntryfileName=null;
+	  
+	 
+	  
+	  String[] myDamLibArray=sharepointConfigServcie.getTHFLibraryDocLocation();
+	    
+		    for(String myDamLibMapObj:myDamLibArray){
+		  	  String[] innerArry=myDamLibMapObj.split("=");
+		  	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"After Split key = "+innerArry[0]);
+		  	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"After Split value = "+innerArry[1]);
+		  	libraryDamLocationMap.put(innerArry[0], innerArry[1]);
+		    }
+		
+		    LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"csvMetadataBeanMap size : "+csvMetadataBeanMap.size());
+	 
+	for(final File fileEntry:folder.listFiles()){
+		         sftpFileList.add(fileEntry.getName());
+		         LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"file entry name : [{}] ",fileEntry.getName());
+		 try {
+		if(fileEntry.isDirectory()){
+			LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"file entry is directory with path : [{}] ",fileEntry.getName());
+		}else{
+			     // eliminate csv file upload
+			if(!fileEntry.getName().endsWith(".csv")){
+			fileEntryfileName=fileEntry.getName();
+			
+			LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"1. file name = "+ fileEntryfileName);
+			LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"2. corresponding library name = "+ csvMetadataBeanMap.get(fileEntryfileName).getLibrary());
+			LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"3. corresponding dam location = "+ libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary()));
+			LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"For file name = "+ fileEntryfileName +" libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary()) : "+ libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary()));
+			
+			if(null!=libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary()) && 
+						                              StringUtils.isNotEmpty(libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary()))){
+				String fullPathWithFileName = libraryDamLocationMap.get(csvMetadataBeanMap.get(fileEntryfileName).getLibrary())+"/"+fileEntryfileName;
+				
+				 Resource resource = this.rr.getResource(fullPathWithFileName);
+		          Asset targetAsset = null;
+				 if ((null != resource) && (null != (targetAsset = (Asset)resource.adaptTo(Asset.class))))
+		          {
+					 LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"Resource already exists..!!!");
+		          }else{
+		        	  LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"Resource is null..creating the asset : "+fullPathWithFileName);
+		          }
+				 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"-->1");
+				   fis = new FileInputStream(fileEntry);
+				   LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"-->2");
+		          String mimeType = this.mimeTypeService.getMimeType(fileEntryfileName);
+		          LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"3 -->" + mimeType);
+		          if (null != targetAsset)
+		          {
+		            Asset newAsset = targetAsset.addRendition("original", fis, mimeType).getAsset();
+		      
+		            LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"Inside create version loop");
+		          
+		            this.updateDocumentMetadata(targetAsset, csvMetadataBeanMap, fileEntryfileName);
+		            
+		            final Node uploadedAssetNode = targetAsset.adaptTo(Node.class);
+		            
+		            //createCustomVersionService.createCustomVersionService(uploadedAssetNode.getPath());
+		            //this.replicationService.replicate(session,ReplicationActionType.ACTIVATE,uploadedAssetNode.getPath());
+		            
+		            LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"updated existing asset [{}] from entry [{}]", newAsset.getPath(),fileEntryfileName);
+		            
+		            successFilesList.add(fileEntryfileName);
+		            createdAssetPathsList.add(uploadedAssetNode.getPath().toString());
+		          }
+		          else
+		          {
+		        	  LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"4");
+		        	    Asset newAsset = this.getAssetManager().createAsset(fullPathWithFileName, fis, mimeType, true);
+		        	    LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"5");
+		                if (null != newAsset)
+		                {
+		                	 
+		                	 final Node uploadedAssetNode = newAsset.adaptTo(Node.class);
+		                	 this.updateDocumentMetadata(newAsset, csvMetadataBeanMap, fileEntryfileName);
+		                	 
+		                	 LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"Uploaded asset node path before publishing path : "+uploadedAssetNode.getPath() +"with session :"+uploadedAssetNode.getSession().getUserID());
+		                	 //this.replicationService.replicate(session,ReplicationActionType.ACTIVATE,uploadedAssetNode.getPath());
+		                	
+		                	 LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"extractEntry: created new asset [{}] from entry [{}]", newAsset.getPath(), fileEntryfileName);
+		                  successFilesList.add(fileEntryfileName);
+		                  createdAssetPathsList.add(uploadedAssetNode.getPath().toString());
+		                }
+		                else
+		                {
+		                	LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"extractEntry: asset manager couldn't create asset for entry [{}]", fileEntryfileName);
+		                  throw new WorkflowException("Asset manager couldn't create asset for entry " + fileEntryfileName);
+		                }
+		          }
+				}
+			else{
+				LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"There is no DAM location mapping for file name :"+fileEntry.getName());
+				noDamMappingList.add(fileEntry.getName());
+			}
+			}else{
+				LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"Since it is CSV file no DAM upload required");
+				successFilesList.add(fileEntry.getName());
+			}
+
+		}
+		 }
+		 catch(SlingException e){
+			 errorFilesList.add(fileEntryfileName);
+			 e.printStackTrace();
+			 LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"*****Inside createDamAssetsFromFolder() method SlingException "+e.getMessage() +e.getCause());
+			
+			
+		 } 
+		 catch(IllegalStateException e){
+			 errorFilesList.add(fileEntryfileName);
+			 e.printStackTrace();
+			 LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"*****Inside createDamAssetsFromFolder() method IllegalStateException "+e.getMessage() +e.getCause());
+			
+		 } catch(Exception e){
+			 errorFilesList.add(fileEntryfileName);
+			 e.printStackTrace();
+			 LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"*****Inside createDamAssetsFromFolder() method exception "+e.getMessage() +e.getCause());
+			
+		 } finally
+	      { 
+		        IOUtils.closeQuietly(fis);
+		   }
+	}
+	
+	return createdAssetPathsList;
+	}
+	
+	
+	
+	private List<Map<String, Object>> readCSVRows(InputStreamReader reader,List<String> myConfigColumnList) throws Exception {
+
+		List<Map<String, Object>> csvRowsList = new ArrayList<Map<String, Object>>();
+		ICsvMapReader mapReader = null;
+		try {
+			mapReader = new CsvMapReader(reader,
+					CsvPreference.STANDARD_PREFERENCE);
+
+			// the header columns are used as the keys to the Map
+			final String[] header = mapReader.getHeader(true);
+			
+			List<String> headerList=Arrays.asList(header);
+			
+			List<String> toReturn = new ArrayList<String>(headerList);
+		    toReturn.removeAll(myConfigColumnList);
+			
+			if(toReturn!=null && toReturn.size()>0){
+				LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"Mismatch cloumn headers are : "+toReturn);
+				throw new Exception("Mismatch in CSV File Column Header Names");
+			}
+			LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"read csv cloumn headers :"+Arrays.asList(header));
+			LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"readCSVRows after processing cell");
+			Map<String, Object> rowMetaDataMap;
+			CellProcessor[] migrationProcessor = getMigrationProcessor(header.length);
+			while ((rowMetaDataMap = mapReader.read(header, migrationProcessor)) != null) {
+
+				csvRowsList.add(rowMetaDataMap);
+			}
+		} catch (Exception exception) {
+			log.info("readCSVRows Exception occurred : "+ exception);
+			throw exception;
+		} finally {
+			if (mapReader != null) {
+				try {
+					mapReader.close();
+					reader.close();
+				} catch (IOException ioException) {
+					log.info("readCSVRows Exception occurred : "+ ioException);
+				}
+			}
+		}
+		return csvRowsList;
+	}
+	
+	private static CellProcessor[] getMigrationProcessor(int colCount) {
+
+		final CellProcessor[] migrationProcessors = new CellProcessor[colCount];
+		for (int i = 0; i < migrationProcessors.length; i++) {
+			migrationProcessors[i] = null;
+		}
+		return migrationProcessors;
+	}
+
+	private static  boolean checkForCSVFile(String fileName)
+	  {
+	      if (null!=fileName && fileName.length()>0 && fileName.contains(".csv")) {
+	        return true;
+	      }
+	    
+	    return false;
+	  }
+
+	 
+	 private AssetManager getAssetManager()
+	    {
+	      return this.assetManager;
+	    }
+	 
+	 private TagManager getTagManager()
+	    {
+	      return this.tagManager;
+	    }
+	 
+	 
+	 private  boolean updateDocumentMetadata(Asset newAsset,Map<String,SharepointMetadataBean> csvMetadataBeanMap,String fileEntryfileName) throws Exception{
+		 LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"Inside updateDocumentMetadata method");
+			
+		 boolean isMetadataUpdated=false;
+	    
+	     
+		 final String MMDDYYYY_PATTERN = "^([0]?[1-9]|[1][0-2])[/]([0]?[1-9]|"
+		 			+ "[1|2][0-9]|[3][0|1])[/]([0-9]{4}|[0-9]{2})$";
+		     
+		     final String MMDDYYYY_FORMAT = "MM/dd/yyyy hh:mm:ss a";
+		     
+	     final Pattern mmddyyyyPattern = Pattern.compile(MMDDYYYY_PATTERN);
+			Matcher dateMatcherMMDDYYYY = null;
+			
+			SimpleDateFormat sdfMMDDYYYY = new SimpleDateFormat(MMDDYYYY_FORMAT);
+	     
+		 Tag resolvedTag = null;
+		
+		 final Calendar dateCalanderValue = Calendar.getInstance();
+		 
+		 String[] multiWebIdStr=null;
+		 final List<String> tagsList=new ArrayList<>();
+		 TagManager tagManager=this.getTagManager();
+		 
+		 String webIdStr=csvMetadataBeanMap.get(fileEntryfileName).getWebId();
+		 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"webIdStr : "+webIdStr);
+		 
+		 try {
+		 if(StringUtils.isNotEmpty(webIdStr)){
+			 if(webIdStr.contains(";")){
+			 multiWebIdStr=webIdStr.split( ";");
+			 for(String tag:multiWebIdStr){
+				 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside multiple tag for loop with tagname : "+tag);
+				 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_ETF+"/"+tag.toLowerCase());
+				 
+				 if (null != resolvedTag) {
+					 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"resolved tag path : "+resolvedTag.getTagID());
+						tagsList.add(resolvedTag.getTagID());
+					}
+				 else{
+					 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_FUNDS+"/"+tag.toLowerCase());
+					 if(null!=resolvedTag){
+						 LoggerUtil.infoLog(THFSharePointSyncWorkflowProcess.class,"resolved tag path : "+resolvedTag.getTagID());
+						 tagsList.add(resolvedTag.getTagID());
+					 }
+					 else{
+						 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_INDEXS+"/"+tag.toLowerCase());
+						 if(null!=resolvedTag){
+							 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"resolved tag path : "+resolvedTag.getTagID());
+							 tagsList.add(resolvedTag.getTagID());
+						 }
+						 else{
+							 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside myelse for csv webId :"+tag);
+							 tagsList.add("");
+						 }
+					 }
+				 }
+			 }
+			 }else{
+				 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside else for file name :" +fileEntryfileName);
+				 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"tag resolution path :"+THF_TAGS_PRODUCTS+THF_TAGS_ETF+"/"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+				 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_ETF+"/"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+				
+				 if (null != resolvedTag) {
+					 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"resolved tag name :"+resolvedTag.getPath());
+					 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"resolved tag path : "+resolvedTag.getTagID());
+						tagsList.add(resolvedTag.getTagID());
+					}else{
+						 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_FUNDS+"/"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+						 if(null!=resolvedTag){
+							 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"resolved tag path : "+resolvedTag.getTagID());
+							 tagsList.add(resolvedTag.getTagID());
+						 }
+							else{
+								 resolvedTag=tagManager.resolve(THF_TAGS_PRODUCTS+THF_TAGS_INDEXS+"/"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+								 if(null!=resolvedTag){
+									 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"resolved tag path : "+resolvedTag.getTagID());
+									 tagsList.add(resolvedTag.getTagID());
+								 }
+								 else{
+									 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside myelse for csv webId :"+csvMetadataBeanMap.get(fileEntryfileName).getWebId().toLowerCase());
+									 tagsList.add("");
+								 }
+							 }
+
+						 
+					 }
+			 
+			 }
+		 }
+		   final Node newAssetNode = newAsset.adaptTo(Node.class);
+
+			if (null != newAssetNode && newAssetNode.hasNode(JCR_CONTENT_NODE+ "/"+ METADATA_NODE)) {
+				Node newAssetMetaDataNode = newAssetNode.getNode(JCR_CONTENT_NODE+ "/"+ METADATA_NODE);
+				
+				//1.Set the document tags
+				if (!tagsList.isEmpty() && tagsList.size()>0) { 									 	
+					LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Setting cq:tags [{}] to cq:tags", tagsList);
+			   this.setProperty(newAssetMetaDataNode, "cq:tags",tagsList.toArray(), true);
+								   isMetadataUpdated=true;
+				}else{
+					 this.setProperty(newAssetMetaDataNode, "cq:tags","", true);
+					 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"No tag set for asset : "+newAssetMetaDataNode.getName());
+					
+				}
+				
+				//2.set the "File"  as metadata property Name
+				if(null!=csvMetadataBeanMap.get(fileEntryfileName).getFile() && StringUtils.isNotEmpty(csvMetadataBeanMap.get(fileEntryfileName).getFile())){
+					
+					LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Before setting metadata property name = "+ csvMetadataBeanMap.get(fileEntryfileName).getFile());
+					 this.setProperty(newAssetMetaDataNode, "name",csvMetadataBeanMap.get(fileEntryfileName).getFile(), true);
+					 
+					//3.set the "File" with out extension as metadata Property piececode
+					String file=csvMetadataBeanMap.get(fileEntryfileName).getFile();
+					if(null!=file && file.contains(".")){
+					String pieceCode=file.substring(0, file.lastIndexOf('.'));
+					LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Before setting metadata property piececode = "+ pieceCode);
+					 this.setProperty(newAssetMetaDataNode, "piececode",pieceCode, true);
+					}else{
+						this.setProperty(newAssetMetaDataNode, "piececode","", true);
+					}
+				
+				}else{
+					this.setProperty(newAssetMetaDataNode, "name","", true);
+				}
+				
+				//4. dc:title
+				if(null !=csvMetadataBeanMap.get(fileEntryfileName).getFileName() && StringUtils.isNotEmpty(csvMetadataBeanMap.get(fileEntryfileName).getFileName())){
+					 this.setProperty(newAssetMetaDataNode, "dc:title",csvMetadataBeanMap.get(fileEntryfileName).getFileName(), true);
+				}else{
+					if(newAssetMetaDataNode.getName()!=null){
+					this.setProperty(newAssetMetaDataNode, "dc:title",newAssetNode.getName(), true);
+					}
+					else{
+						this.setProperty(newAssetMetaDataNode, "dc:title","", true);
+					}
+				}
+
+				//5.Revision Date
+			       String strRevisonDate =csvMetadataBeanMap.get(fileEntryfileName).getModified();
+			       LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"for file name : "+csvMetadataBeanMap.get(fileEntryfileName).getFile() +" --> strRevisonDate : "+strRevisonDate );
+				   Date revisonDate = null;
+				   
+				 
+
+				//outputDate = outputformat.format(strRevisonDate);
+				// Add Revision Date - prism:revisionDate
+				if (StringUtils.isNotEmpty(strRevisonDate)) {
+					   
+					  String[] splitDate=strRevisonDate.split(" ");
+					  String splitStringDate=splitDate[0];
+						
+						log.info("Modified date after split is : "+ splitStringDate);
+						
+					  dateMatcherMMDDYYYY = mmddyyyyPattern.matcher(splitStringDate);
+					
+					if (dateMatcherMMDDYYYY.find()) {
+						revisonDate = sdfMMDDYYYY.parse(strRevisonDate);
+						LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"revisonDate --> {}",revisonDate);
+						dateCalanderValue.setTime(revisonDate);
+						LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"dateCalanderValue --> {}",dateCalanderValue.getTime());
+						LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"before setting prism revision date : "+dateCalanderValue.getTimeInMillis() +"System Time in Millis :"+System.currentTimeMillis());
+						this.setProperty(newAssetMetaDataNode,"prism:revisionDate", dateCalanderValue, true);
+					}else{
+						log.info("Setting property prism:revisionDate to current Date as modified Date given is empty in metadata.csv file");
+						revisonDate = new Date(System.currentTimeMillis());
+						dateCalanderValue.setTime(revisonDate);
+						this.setProperty(newAssetMetaDataNode,"prism:revisionDate", dateCalanderValue, true);
+					}
+						
+				}else{
+					LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Setting value1 [{}]  to property prism:revisionDate empty");
+			    this.setProperty(newAssetMetaDataNode,"prism:revisionDate", "", true);
+				}
+				
+			} 
+			else {
+				LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"No metadata node found for asset : "+newAssetNode.getName());
+				}
+		
+		
+		
+	 } catch (RepositoryException | ParseException parseExcep) {
+		 parseExcep.printStackTrace();
+		 LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"Inside updateDocumentMetadata() method RepositoryException | ParseException block ");
+		}
+		 return isMetadataUpdated;
+	 }
+	 
+	 private boolean setProperty(final Node node, final String name,
+	            final Object value, final boolean autoSave) {
+	        try {
+	            JcrResourceUtil.setProperty(node, name, value);
+	            if (autoSave) {
+	                this.save(node.getSession());
+	            }
+	            return true;
+	        } catch (final NullPointerException e) {
+	        	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Could not set property: {}", e);
+	        } catch (final RepositoryException e) {
+	        	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Could not set property: {}", e);
+	        }
+	        return false;
+	    }
+	 
+	 private void save(final Session session) {
+	        try {
+	            if (session != null && session.hasPendingChanges()) {
+	                session.refresh(true);
+	                session.save();
+	            }
+	        } catch (final RepositoryException e) {
+	        	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Could not save session: ", e);
+	        }
+	    }
+	 
+	 ///File Utils
+	 private void zipGenerator(String acrhivalPath, final String sourceDir, boolean moveFile,List<String> filesList,boolean isSuccess) {
+	    	File fileSource = null;
+	        try {
+	            // create object of FileOutputStream
+	            acrhivalPath = acrhivalPath+"" + File.separator;
+	        	 
+	            // create File object from source directory
+	            fileSource = new File(sourceDir);
+	            
+	          
+	            final FileOutputStream fout = new FileOutputStream(acrhivalPath
+	                    +getCurrentDate(isSuccess));
+	            
+	            // create object of ZipOutputStream from FileOutputStream
+	            final ZipOutputStream zout = new ZipOutputStream(fout);
+	            addDirectory(zout, fileSource,filesList);
+	            // close the ZipOutputStream
+	            zout.close();
+	        } catch (final IOException ioe) {
+	        	LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,"IOException :" + ioe);
+			} finally {
+				if (fileSource != null && fileSource.exists()
+						&& fileSource.isFile() && moveFile) {
+					
+					if(filesList.contains(fileSource.getName())){
+					boolean status = fileSource.delete();
+					LoggerUtil.errorLog(THFSharePointSyncWorkflowProcess.class,
+							"File deletion status for file [{}]: {}",
+							fileSource.getAbsolutePath(), status);
+					}
+				} else if (fileSource != null && fileSource.exists()
+						&& fileSource.isDirectory() && moveFile) {
+					
+					LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside else if");
+
+					for (File file : fileSource.listFiles()) {
+						
+						if(filesList.contains(file.getName())){
+						boolean status = file.delete();
+						LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,
+								"File deletion status for file [{}]: {}",
+								file.getAbsolutePath(), status);
+						
+						}
+					}
+					
+				}
+			}
+	    }
+	 
+	 
+	 
+	 private static void addDirectory(final ZipOutputStream zout,
+	            final File fileSource,List<String> myFilesList) {
+
+		List<File> finalFilesList = new ArrayList<>();
+	        final File[] files = fileSource.listFiles();
+	        
+	        
+	        for(int j=0; j<files.length; j++){
+	        	for(int k=0;k<myFilesList.size();k++){
+	        		if(files[j].getName().equalsIgnoreCase(myFilesList.get(k))){
+	        			finalFilesList.add(files[j]);
+	        		}
+	        	}
+	        }
+
+	        if(finalFilesList.size()>0){
+	        for (int i = 0; i < finalFilesList.size(); i++) {
+	            if (finalFilesList.get(i).isDirectory()) {
+	                addDirectory(zout, finalFilesList.get(i),myFilesList);
+	                continue;
+	            }
+
+		            try {
+		            	final byte[] buffer =returnByteArray();
+		               
+		                final FileInputStream fin = returnFileInputStream(finalFilesList.get(i));
+	
+		                zout.putNextEntry(returnZipEntryObj(finalFilesList.get(i)
+		                        .getName()));
+	
+		                int length;
+	
+		                while ((length = fin.read(buffer)) > 0) {
+		                    zout.write(buffer, 0, length);
+		                }
+		                zout.closeEntry();    
+		                fin.close();
+	
+		            } catch (final IOException ioe) {
+		            	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"IOException :" + ioe);
+	            }
+	        }
+	 }else{
+		 LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"No file found to zip");
+	 }
+	    }
+	 
+	 
+	 private static byte[] returnByteArray() {
+	        return new byte[1024];
+	    }
+	 
+	 private static FileInputStream returnFileInputStream(final File file)
+	            throws FileNotFoundException {
+	        return new FileInputStream(file);
+	    }
+	 
+	 private static ZipEntry returnZipEntryObj(final String fileName) {
+	        return new ZipEntry(fileName);
+	    }
+
+	  private static String getCurrentDate(boolean isSuccess) {
+	    	if(isSuccess){
+	    			return "Success_"+new SimpleDateFormat("yyyy_MM_dd_hhmm'.zip'", Locale.US)
+	    						.format(new Date());
+	    	}else{
+	    		 return "Error_"+new SimpleDateFormat("yyyy_MM_dd_hhmm'.zip'", Locale.US)
+	 	                .format(new Date());
+	    	}
+	    }
+
+		 protected void bindMimeTypeService(MimeTypeService paramMimeTypeService)
+		  {
+		    this.mimeTypeService = paramMimeTypeService;
+		  }
+		  
+		  protected void unbindMimeTypeService(MimeTypeService paramMimeTypeService)
+		  {
+		    if (this.mimeTypeService == paramMimeTypeService) {
+		      this.mimeTypeService = null;
+		    }
+		  }
+		  
+		  //Finds a csv file inside source directory and returns the target CSV file
+		    public File metdataCSVFilefinder(File dir){
+		    	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside metdataCSVFilefinder method ");
+		        File[] listOfCsvFiles=dir.listFiles(new FilenameFilter() { 
+			            public boolean accept(File dir, String filename)
+			            { 
+			            	return filename.endsWith(".csv"); 
+			            }
+		         } );
+		        
+		        if(null!=listOfCsvFiles && listOfCsvFiles.length>0){
+		        	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside metdataCSVFilefinder method returning file with name : "+listOfCsvFiles[0].getName());
+		        return listOfCsvFiles[0];
+		        }else{
+		        	return null;
+		        }
+
+		}
+		    
+		 //Mail Integration starts here
+		    
+		    private void sendEmail(String subject,List<String> successFilesList,List<String> errorFilesList,List<String> missingSFTPfilesList,List<String> noDamMappingList){
+		    	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside sendFTPSuccessEmail()");
+		    	StringBuilder table = new StringBuilder();
+		    	
+		    	StringBuilder table1 = new StringBuilder();
+		    	StringBuilder table2 = new StringBuilder();
+		    	StringBuilder table3 = new StringBuilder();
+		    	StringBuilder table4 = new StringBuilder();
+		    	try{
+		    	//table1 starts here
+					table1.append("<table>");
+					table1.append("<table border=1>");
+					table1.append("<tr class='header'>"+ "<th><b>Sharepoint DAM File(s) processed successfully</b></th></tr>");
+					
+					if(null!=successFilesList && successFilesList.size()>0){
+					for(String damPath:successFilesList){
+					table1.append("<tr>");
+					table1.append("<td>"+damPath+"</td>");
+					table1.append("</tr>");
+					}
+			    }else{
+			    	table1.append("<tr>");
+					table1.append("<td>"+"No Records"+"</td>");
+					table1.append("</tr>");
+			    }
+					table1.append("</table>");
+				
+				//table2 starts here
+					table2.append("<table>");
+					table2.append("<table border=1>");
+					table2.append("<tr class='header'>"+ "<th><b>Sharepoint DAM File(s) mentioned in metadata file but not found in SFTP location</b></th></tr>");
+					if(null!=missingSFTPfilesList && missingSFTPfilesList.size()>0){
+						for(String missingdamPath:missingSFTPfilesList){
+						table2.append("<tr>");
+						table2.append("<td>"+missingdamPath+"</td>");
+						table2.append("</tr>");
+						}
+				    }
+					else{
+				    	table2.append("<tr>");
+						table2.append("<td>"+"No Records"+"</td>");
+						table2.append("</tr>");
+				    }
+						table2.append("</table>");
+						
+						//table3 start here 
+						table3.append("<table>");
+						table3.append("<table border=1>");
+						table3.append("<tr class='header'>"+ "<th><b>Sharepoint DAM File(s) has no respective LibraryName to DAM location Mapping</b></th></tr>");
+						if(null!=noDamMappingList && noDamMappingList.size()>0){
+							for(String nodamMappingPath:noDamMappingList){
+								table3.append("<tr>");
+								table3.append("<td>"+nodamMappingPath+"</td>");
+								table3.append("</tr>");
+							}
+					    }
+						else{
+							table3.append("<tr>");
+							table3.append("<td>"+"No Records"+"</td>");
+							table3.append("</tr>");
+					    }
+						table3.append("</table>"); 
+						
+				//table4 start here 
+					table4.append("<table>");
+					table4.append("<table border=1>");
+					table4.append("<tr class='header'>"+ "<th><b>Sharepoint DAM File(s) Failed to Process</b></th></tr>");
+					if(null!=errorFilesList && errorFilesList.size()>0){
+						for(String errordamPath:errorFilesList){
+							table4.append("<tr>");
+							table4.append("<td>"+errordamPath+"</td>");
+							table4.append("</tr>");
+						}
+				    }
+					else{
+						table4.append("<tr>");
+						table4.append("<td>"+"No Records"+"</td>");
+						table4.append("</tr>");
+				    }
+					table4.append("</table>"); 
+				
+				table.append(table1);
+				table.append("<br/><br/>"+table2);
+				table.append("<br/><br/>"+table3);
+				table.append("<br/><br/>"+table4);
+
+				Map<String, Object> mailProperties = new HashMap<String, Object>();
+				//"Sharepoint file upload Process"
+				mailProperties.put("subject", subject);
+				mailProperties.put("salutation",MailUtils.getServerInformation(configService) + "<br/><br/>");
+				mailProperties.put("table", table);
+				
+				String contactEmail[] = null;
+				contactEmail = this.sharepointConfigServcie.getSuccessEmailIds();
+				GenericMailConfiguration mailConfig = this.mailService.getGenericMailConfiguration(MailConstants.INTERNAL_GENERIC_EMAIL);
+				mailConfig.sendMail("/etc/notification/email/thf/genericmessage",contactEmail, mailProperties);
+				
+		    	}catch(Exception e){
+		    		e.printStackTrace();
+		    		log.error("Inside sendEmail method exception block");
+		    	}finally{
+		    		table=null;
+		    		table1=null;
+		    		table2=null;
+		    		table3=null;
+		    		table4=null;
+		    	}
+				log.info("sendSuccessEmail method exit");
+				
+		   
+		    }
+		    
+		    private void sendFailureMail(String subject,String message) {
+		    	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside sendGenericFailureMail()");
+				StringBuilder table = new StringBuilder();
+                try{
+				table.append("<table>");
+				table.append("<tr><td>Share Point upload process failed ["+ new Date() + "] </td></tr>");
+				table.append("<tr><td> [" + message + "] </td></tr>");
+				table.append("</table>");
+				
+				Map<String, Object> mailProperties = new HashMap<String, Object>();
+				//subject=Sharepoint DAM Upload Failed
+				//message=Sharepoint DAM Upload Failed for following assets
+				mailProperties.put("subject", subject);
+				mailProperties.put("salutation",MailUtils.getServerInformation(configService) + "<br/><br/>");
+				mailProperties.put("table", table);
+				
+				
+				String contactEmail[] = null;
+				contactEmail = this.sharepointConfigServcie.getFailureEmailIds();
+				
+				GenericMailConfiguration mailConfig = this.mailService.getGenericMailConfiguration(MailConstants.INTERNAL_GENERIC_EMAIL);
+				
+				mailConfig.sendMail("/etc/notification/email/thf/genericmessage",contactEmail, mailProperties);
+				
+		    }catch(Exception e){
+	    		e.printStackTrace();
+	    		log.error("Inside sendFailureMail method exception block");
+	    	}finally{
+	    		table=null;
+	    	}
+				LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"sendFailureMail method exit");
+			}
+		    
+		    private void sendNoFileToProcessMail(String subject,String message) {
+		    	LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"Inside sendNoFileToProcessMail()");
+				StringBuilder table = new StringBuilder();
+                try{
+				table.append("<table>");
+				table.append("<tr><td>Share Point upload process workflow triggered at ["+ new Date() + "] </td></tr>");
+				table.append("<tr><td> [" + message + "] </td></tr>");
+				table.append("</table>");
+				
+				Map<String, Object> mailProperties = new HashMap<String, Object>();
+				mailProperties.put("subject", subject);
+				mailProperties.put("salutation",MailUtils.getServerInformation(configService) + "<br/><br/>");
+				mailProperties.put("table", table);
+				
+				
+				String contactEmail[] = null;
+				contactEmail = this.sharepointConfigServcie.getSuccessEmailIds();
+				
+				GenericMailConfiguration mailConfig = this.mailService.getGenericMailConfiguration(MailConstants.INTERNAL_GENERIC_EMAIL);
+				
+				mailConfig.sendMail("/etc/notification/email/thf/genericmessage",contactEmail, mailProperties);
+				
+		    }catch(Exception e){
+	    		e.printStackTrace();
+	    		log.error("Inside sendNoFileToProcessMail() method exception block");
+	    	}finally{
+	    		table=null;
+	    	}
+				LoggerUtil.debugLog(THFSharePointSyncWorkflowProcess.class,"sendNoFileToProcessMail() method exit");
+			}
+
+}

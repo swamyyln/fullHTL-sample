@@ -1,0 +1,142 @@
+package com.apple.edam.applecare.services.workflow.impl;
+
+import javax.jcr.Session;
+
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Properties;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.Service;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.jcr.resource.JcrResourceResolverFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.adobe.granite.workflow.WorkflowException;
+import com.adobe.granite.workflow.WorkflowSession;
+import com.adobe.granite.workflow.exec.WorkItem;
+import com.adobe.granite.workflow.exec.WorkflowProcess;
+import com.adobe.granite.workflow.metadata.MetaDataMap;
+import com.apple.edam.applecare.services.cq.util.AppleCareConstants;
+import com.day.cq.dam.api.Asset;
+
+@Component
+@Service
+@Properties({ @Property(name = "process.label", value = "AppleCare - Create Version"),
+        @Property(name = "service.pid", value = "com.apple.edam.applecare.services.workflow.impl.ACCreateVersion") })
+public class ACCreateVersion implements WorkflowProcess {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ACCreateVersion.class);
+
+    @Reference
+    private JcrResourceResolverFactory resolverFactory;
+
+    @Override
+    public void execute(WorkItem workItem, WorkflowSession workflowSession, MetaDataMap args) throws WorkflowException {
+        Session session = null;
+       LOG.debug("******AppleCare - Create Version*****Start**********");
+        try {
+            session = workflowSession.adaptTo(Session.class);
+
+            ResourceResolver rr = resolverFactory.getResourceResolver(session);
+
+            String payloadPath = workItem.getWorkflowData().getPayload().toString();
+            String assetPath = payloadPath.substring(0, payloadPath.indexOf("/jcr:content"));
+            Resource resource = rr.getResource(assetPath);
+
+            Asset asset = resource.adaptTo(Asset.class);
+
+            if (!(asset.getMimeType().equalsIgnoreCase(testSwamyCareConstants.MIME_TYPE_CSS) || asset.getMimeType()
+                    .equalsIgnoreCase(testSwamyCareConstants.MIME_TYPE_JS))) {
+                asset.createRevision(null, null);
+                session.save();
+                LOG.info("******************After creating the Revision of the Asset********");
+            } else {
+                LOG.info("***************** Revision of the Asset is not required because the uploaded asset type is either CSS or Javascript********");
+            }
+            LOG.debug("******testSwamyCare - Create Version*****End**********");
+        } catch (Exception e) {
+            LOG.info("Exception in creating the version of the asset" + e.getMessage());
+        }
+
+    }
+
+}
+-------------------------------------------------------------------------------------------------------
+
+package com.apple.edam.applecare.services.workflow.impl;
+
+import java.util.List;
+import java.util.Map;
+
+import javax.jcr.Session;
+
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Properties;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.day.cq.replication.ReplicationActionType;
+import com.day.cq.replication.Replicator;
+import com.day.cq.workflow.WorkflowException;
+import com.day.cq.workflow.WorkflowSession;
+import com.day.cq.workflow.exec.HistoryItem;
+import com.day.cq.workflow.exec.WorkItem;
+import com.day.cq.workflow.exec.WorkflowData;
+import com.day.cq.workflow.exec.WorkflowProcess;
+import com.day.cq.workflow.metadata.MetaDataMap;
+
+@Component
+@Service
+@Properties({ @Property(name = "process.label", value = "AppleCare - Publish Asset") })
+@Property(name = "service.pid", value = "com.apple.edam.applecare.services.workflow.impl.ACPublishAsset")
+public class ACPublishAsset implements WorkflowProcess {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ACPublishAsset.class);
+
+    @Reference
+    private Replicator replicator;
+
+    public void execute(WorkItem workItem, WorkflowSession workflowSession, MetaDataMap metadataMap)
+            throws WorkflowException {
+        Session session = null;
+        try {
+            WorkflowData workflowData = workItem.getWorkflowData();
+            LOG.info("PAYLOAD::" + workflowData.getPayload());
+
+            session = workflowSession.getSession();
+            String publishImagePath = "";
+
+            List<HistoryItem> historyList = workflowSession.getHistory(workItem.getWorkflow());
+            for (HistoryItem historyItem : historyList) {
+                WorkItem wi = historyItem.getWorkItem();
+                Map<String, java.lang.Object> map = wi.getMetaDataMap();
+                for (Map.Entry<String, Object> entry : map.entrySet()) {
+                    String key = entry.getKey();
+                    if (key.equals("publishImage")) {
+                        publishImagePath = (String) entry.getValue();
+                    }
+
+                }
+            }
+
+            LOG.info("Published Image Path::" + publishImagePath);
+            if (publishImagePath != null && !(publishImagePath.equals(""))) {
+
+                replicator.replicate(session, ReplicationActionType.ACTIVATE, publishImagePath);
+            } else {
+                LOG.error("asset not found for replication");
+            }
+            session.save();
+
+        } catch (Exception e) {
+            LOG.error("Exception::" + e);
+        }
+
+    }
+
+}

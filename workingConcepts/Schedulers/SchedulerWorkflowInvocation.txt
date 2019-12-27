@@ -1,0 +1,257 @@
+package com.arche11.core.schedulers;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.jcr.Node;
+import javax.jcr.PathNotFoundException;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.jcr.ValueFormatException;
+import javax.jcr.lock.LockException;
+import javax.jcr.nodetype.ConstraintViolationException;
+import javax.jcr.version.VersionException;
+
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.apache.sling.settings.SlingSettingsService;
+import org.osgi.service.component.annotations.Activate;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.metatype.annotations.AttributeDefinition;
+import org.osgi.service.metatype.annotations.Designate;
+import org.osgi.service.metatype.annotations.ObjectClassDefinition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.arche11.core.schedulers.SimpleScheduledTask.Config;
+import com.day.cq.workflow.WorkflowException;
+import com.day.cq.workflow.WorkflowService;
+import com.day.cq.workflow.WorkflowSession;
+import com.day.cq.workflow.exec.WorkflowData;
+import com.day.cq.workflow.model.WorkflowModel;
+
+@Designate(ocd=ShedulerToInvokeWorkflow.Config.class)
+@Component(service=Runnable.class)
+public class ShedulerToInvokeWorkflow implements Runnable{
+	
+	public static final Logger log=LoggerFactory.getLogger(ShedulerToInvokeWorkflow.class);
+	
+	@ObjectClassDefinition(name="Swamy Workflow Invoke Config Service",
+            description = "This config is used to get the properties from OSGI console to trigger Scheduler"
+            		+ "which inturn invokes workflow")
+	public static @interface Config {
+
+@AttributeDefinition(name = "Cron-job expression")
+String scheduler_expression() default "*/30 * * * * ?";
+
+@AttributeDefinition(name = "Concurrent task",
+              description = "Whether or not to schedule this task concurrently")
+boolean scheduler_concurrent() default false;
+
+@AttributeDefinition(name = "A parameter",
+              description = "Can be configured in /system/console/configMgr")
+String myParameter() default "";
+
+@AttributeDefinition(name = "name.configure.Workflow.Id",
+description = "Specifies which workflow should be trigggered")
+String configure_myWorkflow_Id() default "";
+
+@AttributeDefinition(name = "name.configure.Workflow.payload",
+description = "Workflow will be invoked for given payload")
+String configure_myWorkflow_Payload() default "";
+
+//@AttributeDefinition(name = "name.configure.Workflow.Scheduler.Expression",
+//description = "set the expression to trigger the workflow Scheduler")
+//String configure_myWorkflow_Scheduler_Expression() default "*/30 * * * * ?";
+
+}
+	
+	public static final String JCR_CONTENT="/jcr:content";
+	
+	public static final String FREQUENCY="MY_FREQUENCY";
+	
+    /**Workflow service to get the workflow session from normal rr session**/
+	@Reference
+	public WorkflowService wfService;
+	
+	@Reference
+	public ResourceResolverFactory rrfactory;
+	
+	/**SlingSettings service to get the run modes**/
+	public SlingSettingsService slingSettingService;
+	
+	private String myParameter;
+	private String schedulerExpression;
+	private boolean concurrentFlag;
+	private String myWorkflowId;
+	private String myWorkflowPayload;
+	    @Activate
+	    protected void activate(final Config config) {
+	        myParameter = config.myParameter();
+	        schedulerExpression=config.scheduler_expression();
+	        concurrentFlag=config.scheduler_concurrent();
+	        myWorkflowId=config.configure_myWorkflow_Id();
+	        myWorkflowPayload=config.configure_myWorkflow_Payload();
+	    }
+	@Override
+	public void run() {
+		log.info("Inside run method");
+		
+		log.info("myParameter :"+myParameter);
+		log.info("schedulerExpression :"+schedulerExpression);
+		log.info("concurrentFlag :"+concurrentFlag);
+		log.info("myWorkflowId :"+myWorkflowId);
+		
+		if(slingSettingService!=null){
+			log.info("Swamy ** isAuthor :"+slingSettingService.getRunModes().contains("author"));
+		}
+		
+		ResourceResolver resourceResolver=null;
+		WorkflowSession wfSession = null;
+		Session session=null;
+		
+		Map<String, Object> param = new HashMap<String, Object>();
+        param.put(ResourceResolverFactory.SUBSERVICE, "myWorkflowInvokeService");
+        ResourceResolver rr = null;
+           
+            try {
+				rr = rrfactory.getServiceResourceResolver(param);
+				session=rr.adaptTo(Session.class);
+				
+				log.info("got the user session :"+session.getUserID());
+				
+				if(null!=session){
+					wfSession=wfService.getWorkflowSession(session);
+					
+					log.info("workflow session :"+wfSession.getUser().getID());
+					
+					startMyWorkflow(myWorkflowId,myWorkflowPayload,wfSession,schedulerExpression);
+				}
+			} catch (LoginException e) {
+				log.error("Inside Catch block");
+				e.printStackTrace();
+				log.error(e.getMessage());
+			} catch (RepositoryException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+	}
+	
+	public static void startMyWorkflow(String workflowId,String wfPayload,WorkflowSession wfSession,String schedExpression){
+		    final String TYPE_JCR_PATH = "JCR_PATH";
+	        final String workflowModelCheck = "MyCustomSchedulerWorkflow";
+	        
+	        log.info("Inside startMyWorkflow method");
+	try {   
+        // get the workflow model
+        final WorkflowModel model = wfSession.getModel(workflowId);
+        
+        log.info("workflow model is:"+model.getId());
+
+        // create workflow data with JCR_PATH payload type and payload
+        final WorkflowData wfData = wfSession.newWorkflowData(
+                TYPE_JCR_PATH, wfPayload);
+
+        log.info("workflow data is:"+wfData.getPayload());
+	        if (null != workflowId && workflowId.contains(workflowModelCheck)) {
+	        	log.info("Inside workflowModelCheck if condition");
+	            final String path = wfData.getPayload().toString()
+	                    + ShedulerToInvokeWorkflow.JCR_CONTENT;
+	            log.info("Path is :"+path);
+	            Node node=null;
+			
+					node = (Node) wfSession.getSession().getItem(path);
+				
+	            if (node != null) {
+	            	log.info("Inside node not null");
+	            	log.info("Before setting FREQUENCY Property");
+						  node.setProperty(ShedulerToInvokeWorkflow.FREQUENCY,schedExpression);
+						  wfSession.getSession().save();
+						  
+						  log.info("Before Start workflow");
+						  // start the workflow
+						  wfSession.startWorkflow(model, wfData);  
+						  
+						  log.info("After Start workflow");
+	            }else{
+	            	log.info("Node is null");
+	            }
+	        }
+        }catch (PathNotFoundException e1) {
+			e1.printStackTrace();
+		} catch (RepositoryException e1) {
+			e1.printStackTrace();
+		}
+		catch (WorkflowException e) {
+			e.printStackTrace();
+		}
+
+	}
+	
+}
+-----------------------------------------------------------------------------------------------------
+package com.arche11.core.workflow;
+
+import org.osgi.service.component.annotations.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.adobe.granite.workflow.WorkflowException;
+import com.adobe.granite.workflow.WorkflowSession;
+import com.adobe.granite.workflow.exec.WorkItem;
+import com.adobe.granite.workflow.exec.WorkflowProcess;
+import com.adobe.granite.workflow.metadata.MetaDataMap;
+import org.osgi.framework.Constants;
+
+@Component(service=WorkflowProcess.class,property={"process.label=MyCustomWorkflowProcess",
+	                                                       Constants.SERVICE_DESCRIPTION+"=This is my scheduler Workflow"})
+
+
+public class MyCustomWorkflowProcess implements WorkflowProcess{
+
+	public static final Logger log=LoggerFactory.getLogger(MyCustomWorkflowProcess.class);
+	
+	@Override
+	public void execute(WorkItem workItem, WorkflowSession workflowSession, MetaDataMap metadataMap)
+			throws WorkflowException {
+		log.info("**********Inside execute process*********");
+	}
+
+}
+--------------------------------------------------------------
+Creation of System User :
+1)Go to localhost:4502/crx/explorer
+2)Create System User =swamySystemUser
+3)give Intermediate path as "/home/users/system"
+4)verify in crx isSystemUser=true
+5)Go to useradmin and give permissions by checking all checkbox at top level
+
+--------------------------------------------------------------
+System user mapping :
+1)Go to felix console -->Apache sling user mapper service [com.arche11.core.workflow:myWorkflowInvokeService=swamySystemUser]
+2)Also add [com.arche11.core.workflow:myWorkflowInvokeService=swamySystemUser] in Apache sling user mapper service Amendment.
+
+-------------------------------------------------------------
+Verify loggers as below
+
+18.08.2018 17:15:00.008 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow Inside run method
+18.08.2018 17:15:00.008 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow myParameter :swamyTestParameter
+18.08.2018 17:15:00.008 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow schedulerExpression :*/30 * * * * ?
+18.08.2018 17:15:00.008 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow concurrentFlag :false
+18.08.2018 17:15:00.008 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow myWorkflowId :/etc/workflow/models/MyCustomSchedulerWorkflow/jcr:content/model
+18.08.2018 17:15:00.009 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow got the user session :swamySystemUser
+18.08.2018 17:15:00.011 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow workflow session :swamySystemUser
+18.08.2018 17:15:00.011 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow Inside startMyWorkflow method
+18.08.2018 17:15:00.012 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow workflow model is:/etc/workflow/models/MyCustomSchedulerWorkflow/jcr:content/model
+18.08.2018 17:15:00.012 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow workflow data is:/content/content/en
+18.08.2018 17:15:00.012 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow Inside workflowModelCheck if condition
+18.08.2018 17:15:00.012 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow Path is :/content/content/en/jcr:content
+18.08.2018 17:15:00.012 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow Inside node not null
+18.08.2018 17:15:00.012 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow Before setting FREQUENCY Property
+18.08.2018 17:15:00.016 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow Before Start workflow
+18.08.2018 17:15:00.160 *INFO* [sling-default-350-com.arche11.core.schedulers.ShedulerToInvokeWorkflow.10498] com.arche11.core.schedulers.ShedulerToInvokeWorkflow After Start workflow
+18.08.2018 17:15:00.186 *INFO* [JobHandler: /etc/workflow/instances/server0/2018-08-18/MyCustomSchedulerWorkflow_8:/content/content/en] com.arche11.core.workflow.MyCustomWorkflowProcess **********Inside execute process*********
+
+-------------------------------------------------------------------------------

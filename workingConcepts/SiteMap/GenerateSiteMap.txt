@@ -1,0 +1,560 @@
+------------------------Generate sitemap Servlet-----------------------------------------------------------------------
+
+import java.io.IOException;
+import java.io.PrintWriter;
+
+import javax.servlet.ServletException;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.sling.SlingServlet;
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.servlets.SlingSafeMethodsServlet;
+
+import com.day.cq.wcm.api.Page;
+import com.day.cq.wcm.api.PageManager;
+import com.thehartford.thf.core.configmanagement.SiteMapConfigService;
+import com.thehartford.thf.integration.sitemap.XMLSiteMapInterface;
+
+@SlingServlet(generateComponent = true,paths = "/bin/thf/generate/siteMap", methods = { "GET" })
+public class GenerateSiteMapServlet extends SlingSafeMethodsServlet {
+
+	
+	@Reference
+	XMLSiteMapInterface xmlSiteMapInterface;
+	
+	@Reference
+	SiteMapConfigService siteMapConfigService;
+	
+	
+	private static final long serialVersionUID = 1L;
+	
+	  @Override
+	    protected void doGet(SlingHttpServletRequest request, SlingHttpServletResponse response)
+	            throws ServletException, IOException {
+		  Page page =null;
+	        ResourceResolver resourceResolver = request.getResourceResolver();
+	        PageManager pageManager = resourceResolver.adaptTo(PageManager.class);
+	        if(null!=siteMapConfigService.getRootPath() && StringUtils.isNotEmpty(siteMapConfigService.getRootPath())){
+	        page = pageManager.getContainingPage(siteMapConfigService.getRootPath());
+	        }else{
+	        	//default value
+	        page = pageManager.getContainingPage("/content/thf/en");
+	        }
+
+	        String xml=xmlSiteMapInterface.createXmlSitemap(request, response, page,resourceResolver);
+
+	      final PrintWriter out = response.getWriter();
+          response.setContentType("text/xml");
+          response.setHeader("Cache-Control", "no-cache");
+          out.print(xml);
+          out.close();
+	      
+	  }
+}
+------------------------------------XmlSiteMapIntegrationImpl----------------------------------------------------
+package com.thehartford.thf.integration.sitemap;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.StringReader;
+import java.net.SocketException;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+
+import javax.xml.bind.JAXBException;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.lang.time.FastDateFormat;
+import org.apache.commons.net.ftp.FTP;
+import org.apache.commons.net.ftp.FTPClient;
+import org.apache.commons.net.ftp.FTPReply;
+
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.Service;
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ValueMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.w3c.dom.Document;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
+
+import com.day.cq.commons.Externalizer;
+import com.day.cq.wcm.api.Page;
+import com.jcraft.jsch.Channel;
+import com.jcraft.jsch.ChannelSftp;
+import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.Session;
+import com.thehartford.thf.core.configmanagement.SiteMapConfigService;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.mail.impl.MailConstants;
+import com.thehartford.thf.core.sitemap.SitemapJAXBWrapper;
+import com.thehartford.thf.core.sitemap.jaxb.TUrl;
+import com.thehartford.thf.core.sitemap.jaxb.Urlset;
+import com.thehartford.thf.integration.ftp.exception.FTPConnectionException;
+import com.thehartford.thf.integration.ftp.service.AbstractFileReader;
+import com.thehartford.thf.core.configmanagement.ConfigService;
+import com.thehartford.thf.core.mail.GenericMailConfiguration;
+import com.thehartford.thf.core.mail.GenericMailService;
+import com.thehartford.thf.core.util.MailUtils;
+
+@Component
+@Service
+public class XMLSiteMapInterfaceImpl implements XMLSiteMapInterface {
+
+	@Reference
+	SiteMapConfigService siteMapConfigService;
+	
+	private static final Logger log=LoggerFactory.getLogger(XMLSiteMapInterfaceImpl.class);
+	
+	/** The Constant DATE_FORMAT. */
+    private static final String DATE_FORMAT = "yyyy-MM-dd'T'HH:mm:ssZ";
+
+    /** The Constant COLON. */
+    private static final char COLON = ':';
+
+    /** The Constant HTTP. */
+    private static final String HTTP = "http";
+
+    /** The Constant BACK_SLASH. */
+    private static final String BACK_SLASH = "://";
+
+    /** The Constant HTTPS. */
+    private static final String HTTPS = "https";
+
+    /** The Constant Z_INDEX. */
+    private static final int Z_INDEX = 22;
+
+    @Reference
+    private Externalizer externalizer;
+    
+    @Reference
+	private ConfigService configService;
+    
+	 @Reference
+	private GenericMailService mailService;
+    
+    /**
+     * Create XML Sitemap.
+     * 
+     * @param request
+     *            request
+     * @param response
+     *            response
+     * @param xmlSitemapPage
+     *            xmlSitemapPage
+     */
+    public String createXmlSitemap(final SlingHttpServletRequest request,
+            final SlingHttpServletResponse response, final Page xmlSitemapPage,ResourceResolver rr) {
+    	 String xml =null;
+    	 boolean generatedFlag=false;
+    	 int ftpfileUploadStatus=0;
+    	 
+        try {
+              log.info("Before Calling createUrlSet method");
+            final Urlset urlset = this.createUrlSet(request,
+                    xmlSitemapPage,rr);
+            final SitemapJAXBWrapper sitemapJAXBWrapper = SitemapJAXBWrapper
+                    .getInstance();
+            xml = sitemapJAXBWrapper.toXml(urlset);
+            //Write to FTP location
+            generatedFlag=this.writeOutputAsXML(siteMapConfigService.getFileDestinationPath(),xml);
+            log.info("Before ftp xml file upload");
+           
+            if(generatedFlag){
+            	ftpfileUploadStatus=this.ftpUpload(siteMapConfigService.getHost(), siteMapConfigService.getPort(), siteMapConfigService.getUserName(), siteMapConfigService.getPassword(), siteMapConfigService.getRemoteDir(), siteMapConfigService.getFileDestinationPath());
+            	log.info("custom ftpfileUploadStatus : "+ftpfileUploadStatus);
+            	if(ftpfileUploadStatus==1){
+            		log.info("Inside Failure mail");
+            		this.sendSiteMapGenericMail("SiteMap Upload Failed","SiteMap has been generated in publish server,but webserver upload failed.Please upload sitemap Manually to webserver",siteMapConfigService.getHost());
+            	}/*else{
+            		log.info("Inside success mail");
+            		this.sendSiteMapGenericMail("SiteMap Upload Success","SiteMap has been generated in publish server and placed in webserver docroot location",siteMapConfigService.getHost());
+            	}*/
+            }else{
+            	log.info("sitemap generation failed at source :: publish server");
+            }
+            log.info("After ftp xml file upload");
+           
+        } catch (final IOException e1) {
+           log.error("Inside Catch block1"+e1.getMessage());
+        } catch (final JAXBException e2) {
+        	 log.error("Inside Catch block2"+e2.getMessage());
+        } catch (final SAXException e3) {
+        	 log.error("Inside Catch block3"+e3.getMessage());
+        }
+		return xml;
+        
+    }
+
+    /**
+     * Create Urlset.
+     * 
+     * @param request
+     *            the request
+     * @param xmlSitemapPage
+     *            the xml sitemap page
+     * @return the urlset
+     */
+    private  Urlset createUrlSet(final SlingHttpServletRequest request,
+            final Page xmlSitemapPage,ResourceResolver rr) {
+        final Page languageRootPage =xmlSitemapPage; 
+        final String languageRootPageName = languageRootPage.getName();
+        log.info("Inside createUrlSet method with languageRootPageName : "+languageRootPageName);
+        final Urlset urlset = new Urlset();
+        log.info("Before calling addChildrenToUrlset method ");
+        this.addChildrenToUrlset(languageRootPage,languageRootPageName, urlset,rr,request);
+        return urlset;
+    }
+    
+    /**
+     * Add all children to urlset.
+     * 
+     * @param page
+     *            the page
+     * @param languageRootPageName
+     *            the language root page name
+     * @param urlset
+     *            the urlset
+     * @param serverPath
+     *            the server path
+     * @param excludePagesArraySet
+     *            the exclude pages array set
+     */
+    private  void addChildrenToUrlset(final Page page,final String languageRootPageName, final Urlset urlset,ResourceResolver rr,final SlingHttpServletRequest request) {
+        final Iterator<Page> iterator = page.listChildren();
+        log.info("Inside addChildrenToUrlset method GETTING CHILD PAGES :"+page.getName());
+        while (iterator.hasNext()) {
+        	String slingResourceType=null;
+	    	boolean isNotallowedResource=false;
+	    	//String redirectTarget=null;
+            final Page nextPage = iterator.next();
+            final String path = nextPage.getPath();
+            
+         	 final ValueMap pageProperties = nextPage.getProperties();
+	    	 //-->for filter1
+			  if(pageProperties.containsKey("sling:resourceType")){
+				  if(null!=pageProperties.get("sling:resourceType", String.class)){
+					  slingResourceType=pageProperties.get("sling:resourceType", String.class);
+					  if(null!=slingResourceType && StringUtils.isNotEmpty(slingResourceType)){
+						  log.info("with actual sling resourceType :"+slingResourceType);
+						    //block the particular compnent paths
+						  isNotallowedResource=this.isNotAllowedResourceType(slingResourceType);
+						  log.info("with actual value of  isNotallowedResource :"+ isNotallowedResource);
+					/*	  if(!isNotallowedResource){
+							  //if component is allowed then check if it is redirect component or not
+							  if(slingResourceType.contains("thf/components/page/redirect")){
+								  if(null!=pageProperties.get("redirectTarget", String.class)){
+								  redirectTarget=pageProperties.get("redirectTarget", String.class);
+								  log.info("with actual value of  redirectTarget :"+ redirectTarget);
+							  }
+						  }
+					  }	*/					
+				  }
+				  }
+			  }
+				  if(!isNotallowedResource){
+					      //-->for filter2
+			          if(!this.skipPagePath(path)){
+			             log.info("Inside addChildrenToUrlset method with child Page_Path :"+path);
+			             TUrl url = this.getTURL();
+		                 TUrl childUrl = this.createUrl(nextPage.getName(), nextPage, url, path,rr,request);
+		                 urlset.getUrl().add(childUrl);
+			             addChildrenToUrlset(nextPage,nextPage.getName(), urlset,rr,request);
+			          }
+	        }
+        }
+		  }
+
+    /**
+     * Gets the turl.
+     * 
+     * @return the turl
+     */
+    private TUrl getTURL() {
+        TUrl url = new TUrl();
+        return url;
+    }
+    /**
+     * Create url for the given page.
+     * 
+     * @param languageRootPageName
+     *            the language root page name
+     * @param serverPath
+     *            the server path
+     * @param page
+     *            the page
+     * @param role
+     *            the role
+     * @param url
+     *            the url
+     * @param path
+     *            the path
+     * @return TUrl
+     */
+    private TUrl createUrl(final String languageRootPageName, final Page page, final TUrl url, final String path,ResourceResolver rr,SlingHttpServletRequest request) {
+        boolean devAuthorFlag=true;
+        String loc =null;
+     /*   String protocolType=request.getProtocol();
+        String hostName=request.getServerName();
+        String port=Integer.toString(request.getServerPort());
+        if(null!=redirectPath && StringUtils.isNotEmpty(redirectPath)){
+        	 if(redirectPath.contains("#")){
+        		 loc=externalizer.externalLink(rr, "publish", redirectPath);	
+        		 log.info("Inside redirect if # with loc :"+loc);
+        	 }else{
+        		 loc=externalizer.externalLink(rr, "publish", String.format("%s.html", redirectPath));	
+        		 log.info("Inside redirect else with loc :"+loc);
+        	 }
+        }
+        else{*/
+        	loc=externalizer.externalLink(rr, "publish", String.format("%s.html", page.getPath()));	
+        	log.info("Inside normal page path with loc :"+loc);
+       /* }	*/
+    	if(devAuthorFlag){
+    		loc=loc.replace("/content/thf/en", "");
+    	}
+    	  loc=loc.replace((request.getScheme()+"://"+request.getServerName()+":"+request.getServerPort()), siteMapConfigService.getExternalDomain());
+    	 log.info("Inside createUrl with final loc :"+loc);
+    	url.setLoc(loc);
+        final String lastModified = this.getW3cLastModified(page);
+        log.info("Inside createUrl with lastModified :"+lastModified);
+        url.setLastmod(lastModified);
+        return url;
+
+    }
+
+    /**
+     * Gets the w3c last modified.
+     * 
+     * @param page
+     *            the page
+     * @return the w3c last modified
+     */
+
+    /**
+     * @param page
+     * @return lastModified in w3c date format
+     */
+    private  String getW3cLastModified(final Page page) {
+    	 
+        final FastDateFormat w3cDateFormat = FastDateFormat
+                .getInstance(XMLSiteMapInterfaceImpl.DATE_FORMAT);
+        // if (w3cDateFormat != null) {
+        if (page.getLastModified() != null) {
+            final String lastModified = w3cDateFormat.format(page
+                    .getLastModified().getTime());
+            log.info("Inside createUrl with lastModified :"+lastModified);
+            log.info("Inside createUrl with lastModified return value :"+
+            lastModified.substring(0, XMLSiteMapInterfaceImpl.Z_INDEX)
+            + XMLSiteMapInterfaceImpl.COLON
+            + lastModified.substring(XMLSiteMapInterfaceImpl.Z_INDEX));
+            return lastModified.substring(0, XMLSiteMapInterfaceImpl.Z_INDEX)
+                    + XMLSiteMapInterfaceImpl.COLON
+                    + lastModified.substring(XMLSiteMapInterfaceImpl.Z_INDEX);
+            // }
+            // return null;
+        }
+        return null;
+    }
+    
+    public boolean writeOutputAsXML(String fileDestinationPath,String xmlSource){
+    	boolean isSiteMapGenearated=false;
+    	
+    	  try {
+        	  // Parse the given input
+	        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+	        DocumentBuilder builder = factory.newDocumentBuilder();
+	        Document doc = builder.parse(new InputSource(new StringReader(xmlSource)));
+
+	        // Write the parsed document to an xml file
+	        TransformerFactory transformerFactory = TransformerFactory.newInstance();
+	        Transformer transformer = transformerFactory.newTransformer();
+	        DOMSource source = new DOMSource(doc);
+	        
+	        //draw the text
+
+	        StreamResult result =  new StreamResult(new File(fileDestinationPath));
+			transformer.transform(source, result);
+			isSiteMapGenearated=true;
+			
+		} catch (TransformerException e) {
+			isSiteMapGenearated=false;
+			e.printStackTrace();
+		} catch (SAXException e) {
+			isSiteMapGenearated=false;
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} catch (ParserConfigurationException e) {
+			// TODO Auto-generated catch block
+			isSiteMapGenearated=false;
+			e.printStackTrace();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			isSiteMapGenearated=false;
+			e.printStackTrace();
+		}
+    	  
+    	  return isSiteMapGenearated;
+    }
+    
+    public boolean isNotAllowedResourceType(String currentResourceType){
+    	boolean notAllowedresourceFlag=false;
+    	  log.info("Inside isNotAllowedResourceType method  with currResourceType :"+currentResourceType);
+    	List<String> notAllowedResourceTypeList=Arrays.asList(siteMapConfigService.getExcludeResouceTypes());
+    	if(null!=notAllowedResourceTypeList && notAllowedResourceTypeList.size()>0){
+    		for(String resourceType:notAllowedResourceTypeList){
+    			  log.info("Inside isNotAllowedResourceType method  with restrcited list resourceType :"+resourceType);
+    			if(currentResourceType.contains(resourceType)){
+    				notAllowedresourceFlag=true;
+    			}
+    		}
+    	}
+    	log.info("Inside isNotAllowedResourceType method with return value NotAllowedContentPath :"+notAllowedresourceFlag);
+    	return notAllowedresourceFlag;
+    }
+    
+  public boolean skipPagePath(String path){
+	  log.info("Inside skipPagePath else with path :"+path);
+    boolean notAllowedContentPath=false;
+    List<String> notAllowedContentPathList=Arrays.asList(siteMapConfigService.getExcludeContentPaths()); 
+    	if(null!=notAllowedContentPathList && notAllowedContentPathList.size()>0){
+	    	for(String contentPath:notAllowedContentPathList){
+	    		if(null!=contentPath && StringUtils.isNotEmpty(contentPath)){
+	    		  log.info("Inside skipPagePath method with restrcited list path :"+contentPath);
+	    		if(path.contains(contentPath)){
+	    			notAllowedContentPath=true;
+	    		}
+	    		}else{
+	    			notAllowedContentPath=false;
+	    		}
+	    	}
+    	}
+    	log.info("Inside skipPagePath method with return value NotAllowedContentPath :"+notAllowedContentPath);
+    	return notAllowedContentPath;
+    }
+  
+  public final int ftpUpload(final String host, final int port, 
+          final String username, final String password,
+          final String remoteFilePath, final String localFilePath) throws FTPConnectionException {
+      int status = 0;
+      LoggerUtil.debugLog(this.getClass(), "Inside SiteMap FTPUpload()............");
+      //FTPClient ftpClient = new FTPClient();
+      FileInputStream fis = null;
+      File localFile =  null;
+      //int replyCode;
+      //boolean connected = false;
+      log.info("ftpUpload started with host : "+host 
+      		                  +" port : "+port 
+      		                  +" username : "+username
+      		                  +" password : "+password
+      		                  +" remoteFilePath : "+remoteFilePath
+      		                  +" localFilePath : "+localFilePath);
+      boolean fileUploaded = false;
+      
+      Session session = null;
+      Channel channel = null;
+      ChannelSftp channelSftp = null;
+      try {
+    	  JSch jsch = new JSch();
+          session = jsch.getSession(username, host, port);
+          session.setPassword(password);
+          java.util.Properties config = new java.util.Properties();
+          config.put("StrictHostKeyChecking", "no");
+          session.setConfig(config);
+          session.connect();
+          log.info("Host connected.");
+          channel = session.openChannel("sftp");
+          channel.connect();
+          log.info("sftp channel opened and connected.");
+          channelSftp = (ChannelSftp) channel;
+          channelSftp.cd(remoteFilePath);
+          localFile = new File(localFilePath);
+          fis = new FileInputStream(localFile); 
+          channelSftp.put(fis, localFile.getName());
+          log.info("File transfered successfully to remote host.");
+          status=0;
+      }
+    	catch (FileNotFoundException fnfException) {
+    		status=1;
+          LoggerUtil.errorLog(this.getClass(), "", fnfException);
+      } /*catch (IOException ioException) {
+          LoggerUtil.errorLog(this.getClass(), "", ioException);
+      }*/ catch (Exception e) {
+    	  status=1;
+          LoggerUtil.errorLog(this.getClass(), "Exception found while tranfer the response.", e.getMessage());
+      } finally {
+          try {
+              if (fis != null) {
+                  fis.close();
+                  log.info("fis is closed now.");
+              }
+              channelSftp.exit();
+             log.info("sftp Channel exited.");
+              channel.disconnect();
+              log.info("Channel disconnected.");
+              session.disconnect();
+              log.info("Host Session disconnected.");
+          } catch (IOException e) {
+        	  status=1;
+              LoggerUtil.errorLog(this.getClass(), "", e);
+          }
+      }
+      return status;
+  }
+  
+  private void sendSiteMapGenericMail(String subject,String message,String host) {
+  	log.info("Inside sendSiteMapGenericMail()");
+		StringBuilder table = new StringBuilder();
+      try{
+		table.append("<table>");
+		table.append("<tr><td>SiteMap FTP Upload triggered for "+host+" at ["+ new Date() + "] </td></tr>");
+		table.append("<tr><td><b> [" + message + "] <b></td></tr>");
+		table.append("</table>");
+		
+		Map<String, Object> mailProperties = new HashMap<String, Object>();
+		mailProperties.put("subject", subject);
+		mailProperties.put("salutation"," ");
+		mailProperties.put("table", table);
+		
+		
+		String contactEmail[] = null;
+		contactEmail = this.siteMapConfigService.getFailureEmailIds();
+		
+		GenericMailConfiguration mailConfig = this.mailService.getGenericMailConfiguration(MailConstants.INTERNAL_GENERIC_EMAIL);
+		
+		mailConfig.sendMail("/etc/notification/email/thf/genericmessage",contactEmail, mailProperties);
+		
+  }catch(Exception e){
+		e.printStackTrace();
+		log.error("Inside sendSiteMapGenericMail() method exception block : "+e.getMessage());
+	}finally{
+		table=null;
+	}
+      log.info("sendSiteMapGenericMail() method exit");
+	}
+  
+
+}
+--------------------------------------------------------------------------------------------------

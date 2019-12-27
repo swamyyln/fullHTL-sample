@@ -1,0 +1,993 @@
+package com.thehartford.thf.workflows;
+
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import javax.jcr.AccessDeniedException;
+import javax.jcr.RepositoryException;
+import javax.jcr.UnsupportedRepositoryOperationException;
+import javax.jcr.Value;
+import javax.jcr.ValueFormatException;
+
+import org.apache.commons.collections.MultiMap;
+import org.apache.commons.collections.map.MultiValueMap;
+import org.apache.commons.lang.ArrayUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Properties;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.Service;
+import org.apache.jackrabbit.api.JackrabbitSession;
+import org.apache.jackrabbit.api.security.user.Authorizable;
+import org.apache.jackrabbit.api.security.user.Group;
+import org.apache.sling.commons.json.JSONArray;
+import org.apache.sling.commons.json.JSONException;
+import org.apache.sling.commons.json.JSONObject;
+import org.osgi.framework.Constants;
+
+import com.day.cq.workflow.exec.WorkflowData;
+import com.day.cq.workflow.exec.WorkflowProcess;
+import com.day.cq.workflow.WorkflowException;
+import com.day.cq.workflow.WorkflowSession;
+import com.day.cq.workflow.exec.WorkItem;
+import com.day.cq.workflow.metadata.MetaDataMap;
+import com.thehartford.thf.core.configmanagement.ConfigService;
+import com.thehartford.thf.core.configmanagement.ContentExpirationService;
+import com.thehartford.thf.core.exception.ServiceException;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.mail.GenericMailService;
+import com.thehartford.thf.core.mail.impl.MailConstants;
+
+/**
+ * sends content expiry notifications
+ */
+@Component
+@Service
+@Properties({
+		@Property(name = Constants.SERVICE_DESCRIPTION, value = "Content Expiry Send Mail Process"),
+		@Property(name = Constants.SERVICE_VENDOR, value = "Wipro"),
+		@Property(name = "process.label", value = "Content Expiry Send Mail Process") })
+public class ContentExpirySendMailProcess implements WorkflowProcess {
+
+	@Reference
+	private GenericMailService genericMailService;
+
+	/** The config service. */
+	@Reference
+	private ConfigService configService;
+
+	/** The ContentExpirationService service. */
+	@Reference
+	private ContentExpirationService contentExpirationService;
+
+	private String[] emailRecipients = null;
+	private String[] systemAdminEmailIds = null;
+	private String[] contentAdminEmailIds = null;
+	private String[] groupEmailId = null;
+	private String emailTemplate = "/etc/notification/email/thf/contentexpiry";
+	private String emailTemplateDeacivated = "/etc/notification/email/thf/deactivatemail";
+	/** The constant for NODE_PROPERTY_EMAIL_ID. */
+	private static final String NODE_PROPERTY_EMAIL_ID = "emailId";
+	/** The constant for USER_GROUP_LIST. */
+	private static final String USER_GROUP_LIST = "receiveList";
+	String deactivationFailed = "DeactivationFailed";
+	private String docType = "Document";
+	private String pageType = "Page";
+	private String damAssetContent = "dam:AssetContent";
+	private String cqPageContent = "cq:PageContent";
+	private String jcrContent = "/jcr:content";
+	private String damadmin = "/damadmin#";
+	private String errorTemplate = "/etc/notification/email/thf/contentexpiryworkflowerrornotification";
+
+	/**
+	 * Constants for notification.
+	 */
+	private static int ZERO_DAY = 0;
+	String daysPassed = "DaysPassed";
+
+	private static final String MAP_RETURED = "mapReturned";
+
+	/**
+	 * send the notifications to content authors regarding expiry content.
+	 * 
+	 * @param item
+	 *            the current step.
+	 * @param session
+	 *            the workflow session.
+	 * @param args
+	 *            input arguments to the process.
+	 * @throws WorkflowException
+	 *             to be handled by caller.
+	 */
+	@SuppressWarnings({ "rawtypes", "unchecked" })
+	@Override
+	public final void execute(final WorkItem item,
+			final WorkflowSession session, final MetaDataMap args)
+			throws WorkflowException {
+
+		LoggerUtil.debugLog(this.getClass(), "Inside execute method");
+		/**
+		 * Nullifying the class variables
+		 */
+		nullify();
+		MultiMap multiMap = new MultiValueMap();
+		multiMap.clear();
+
+		JackrabbitSession jrSession = (JackrabbitSession) session.getSession();
+		// LoggerUtil.debugLog(ContentExpiryProcess.class,
+		// "multimap size in the begining::::"+multiMap.size());
+		int period = 0;
+		ArrayList<String> deactivationFailedPath = new ArrayList<String>();
+		String processArgs = null;
+
+		final WorkflowData data = item.getWorkflowData();
+
+		Map map = data.getMetaDataMap();
+		if (!map.isEmpty()) {
+
+			try {
+				List<String> emailIds = this.populateEmailList(item, args,
+						jrSession);
+
+				for (String emailId : emailIds) {
+
+					groupEmailId = (String[]) ArrayUtils.add(groupEmailId,
+							emailId);
+					LoggerUtil.debugLog(this.getClass(),
+							"execute  method emailId: " + emailId.toString());
+
+				}
+
+			} catch (AccessDeniedException e1) {
+
+				LoggerUtil.errorLog(
+						this.getClass(),
+						"execute  method AccessDeniedException: "
+								+ e1.getMessage(), e1);
+				sendErrorNotification(e1.getMessage(), session, item);
+			} catch (UnsupportedRepositoryOperationException e1) {
+				LoggerUtil.errorLog(this.getClass(),
+						"execute  method UnsupportedRepositoryOperationException: "
+								+ e1.getMessage(), e1);
+				sendErrorNotification(e1.getMessage(), session, item);
+			} catch (ValueFormatException e1) {
+				LoggerUtil.errorLog(
+						this.getClass(),
+						"execute  method ValueFormatException: "
+								+ e1.getMessage(), e1);
+				sendErrorNotification(e1.getMessage(), session, item);
+			} catch (IllegalStateException e1) {
+				LoggerUtil.errorLog(
+						this.getClass(),
+						"execute  method IllegalStateException: "
+								+ e1.getMessage(), e1);
+				sendErrorNotification(e1.getMessage(), session, item);
+			} catch (RepositoryException e1) {
+				LoggerUtil.errorLog(
+						this.getClass(),
+						"execute  method RepositoryException: "
+								+ e1.getMessage(), e1);
+				sendErrorNotification(e1.getMessage(), session, item);
+			}
+
+			if (map.containsKey(daysPassed)) {
+				processArgs = (String) map.get(daysPassed);
+				period = Integer.parseInt(processArgs);
+
+				if (period == 0) {
+					LoggerUtil.debugLog(this.getClass(), "inside if period is "
+							+ period);
+
+					if (map.containsKey(MAP_RETURED)) {
+						
+						LoggerUtil.debugLog(this.getClass(), "inside if map returned ");
+
+						multiMap = (MultiMap) map.get(MAP_RETURED);
+						try {
+
+							processReportFromMultimap(session, item, multiMap,
+									period);
+
+						} catch (JSONException e) {
+							LoggerUtil
+									.errorLog(
+											this.getClass(),
+											"\n ContentExpirySendMailProcess: JSONException : {}",
+											e);
+							sendErrorNotification(e.getMessage(), session, item);
+						}
+
+					}
+					if (map.containsKey(deactivationFailed)) {
+
+						LoggerUtil.debugLog(this.getClass(),
+								"There are few nodes which not deactivated");
+
+						deactivationFailedPath = (ArrayList<String>) map
+								.get(deactivationFailed);
+
+						if (!deactivationFailedPath.isEmpty()) {
+							errorInDeactivationNotificaion(deactivationFailedPath);
+
+						}
+
+					}
+
+				} else {
+					LoggerUtil.debugLog(this.getClass(),
+							"inside else period is " + period);
+					if (map.containsKey(MAP_RETURED)) {
+
+						multiMap = (MultiMap) map.get(MAP_RETURED);
+						if (!multiMap.isEmpty()) {
+							Set<String> lastEditors = multiMap.keySet();
+							for (String lastEditor : lastEditors) {
+								LoggerUtil.debugLog(this.getClass(), "key : "
+										+ lastEditor);
+								LoggerUtil.debugLog(this.getClass(),
+										"values : " + multiMap.get(lastEditor));
+
+								List<CRXResult> values = (List<CRXResult>) multiMap
+										.get(lastEditor);
+
+								try {
+									processReportFromMap(session, item,
+											lastEditor, values, period);
+								} catch (JSONException e) {
+
+									LoggerUtil
+											.errorLog(
+													this.getClass(),
+													"\n ContentExpirySendMailProcess: JSONException : {}",
+													e);
+									sendErrorNotification(e.getMessage(),
+											session, item);
+
+								}
+
+							}
+
+						}
+
+					}
+
+				}
+			}
+		}
+
+		LoggerUtil.debugLog(this.getClass(), " execute method end");
+
+	}
+
+	/**
+	 * set the mail receipients for various notifications
+	 */
+
+	private void setRecipients(int period, String editoremail) {
+
+		LoggerUtil.debugLog(this.getClass(),
+				"Inside ContentExpirySendMailProcess.setRecipients() param period:"
+						+ period + " and editoremail: " + editoremail);
+
+		systemAdminEmailIds = configService.getAdminEmailId();
+		contentAdminEmailIds = contentExpirationService.getAdminEmailId();
+		// String[] groupEmailIds=this.getGropEmailId();
+		emailRecipients = (String[]) ArrayUtils.addAll(systemAdminEmailIds,
+				contentAdminEmailIds);
+
+		if (period != ContentExpirySendMailProcess.ZERO_DAY) {
+
+			if (!StringUtils.isBlank(editoremail)) {
+				emailRecipients = (String[]) ArrayUtils.add(emailRecipients,
+						editoremail);
+				LoggerUtil.debugLog(this.getClass(),
+						"emailRecipients editoremail:" + editoremail
+								+ "added to emailRecipients");
+			}
+		}
+		if (groupEmailId != null) {
+
+			emailRecipients = (String[]) ArrayUtils.addAll(emailRecipients,
+					groupEmailId);
+		}
+
+		LoggerUtil.debugLog(this.getClass(), "emailRecipients count:"
+				+ emailRecipients.length);
+
+		LoggerUtil.debugLog(this.getClass(),
+				"Exiting ContentExpirySendMailProcess.setRecipients()");
+
+	}
+
+	/**
+	 * set the mail properties and calls sendmail method of mailutils class
+	 */
+	private void sendEmail(String contentTable, String publisher,
+			String publisheremail, int period) throws ServiceException {
+
+		LoggerUtil.debugLog(this.getClass(),
+				"Inside sendEmail() with contentTable:==>", contentTable);
+		LoggerUtil.debugLog(this.getClass(),
+				"Inside sendEmail() with publisher:==>", publisher,
+				publisheremail);
+		LoggerUtil.debugLog(this.getClass(),
+				"Inside sendEmail() with period:==>", period);
+
+		String subject = Integer.toString(period);
+		SimpleDateFormat sdf = new SimpleDateFormat("MM/dd/yyyy");
+		Calendar c = Calendar.getInstance();
+		c.setTime(new Date()); // Now use today date.
+		c.add(Calendar.DATE, period); // Adding notification period
+		String expiryDate = sdf.format(c.getTime());
+
+		setRecipients(period, publisheremail);
+
+		try {
+			Map<String, Object> mailProperties = new HashMap<String, Object>();
+
+			mailProperties.put("salutation",
+					MailUtils.getServerInformation(configService));
+			mailProperties.put("publisher", publisher);
+			mailProperties.put("subject", subject);
+			mailProperties.put("contentTable", contentTable);
+			mailProperties.put("date", expiryDate);
+			if (period == 0) {
+				LoggerUtil.debugLog(this.getClass(),
+						"Content expiry sending mail with template emailTemplateDeacivated. period is "
+								+ period);
+				MailUtils.sendMail(emailTemplateDeacivated, removeDuplicateRecipients(emailRecipients),
+						mailProperties, genericMailService);
+			} else {
+				LoggerUtil.debugLog(this.getClass(),
+						"Content expiry sending mail with template emailTemplate. period is "
+								+ period);
+				MailUtils.sendMail(emailTemplate, removeDuplicateRecipients(emailRecipients),
+						mailProperties, genericMailService);
+			}
+			LoggerUtil.debugLog(this.getClass(),
+					"Content expiry mail sent successfully");
+		} catch (Exception e) {
+			LoggerUtil
+					.errorLog(
+							this.getClass(),
+							"\n ContentExpirySendMailProcess: Exception in sendEmail() : {}",
+							e);
+
+			throw new ServiceException(e);
+		}
+		LoggerUtil.debugLog(this.getClass(),
+				"Exiting ContentExpirySendMailProcess.sendEmail()");
+
+	}
+
+	private void processReportFromMap(WorkflowSession session, WorkItem item,
+			String lastEditor, List<CRXResult> objList, int period)
+			throws JSONException {
+		LoggerUtil.debugLog(this.getClass(),
+				" Inside processReportFromMap method period  :" + period);
+		StringBuilder table = new StringBuilder();
+		String editoremail = StringUtils.EMPTY;
+		int k = 0;
+
+		ArrayList<String> referecesArray = new ArrayList<String>();
+		table.append("<table border='1' CELLPADDING='1' CELLSPACING='1' WIDTH='100%'>");
+		table.append("<tr class='header'>");
+		table.append("<th>");
+		table.append("Sr. No.");
+		table.append("</th>");
+		table.append("<th >");
+		table.append("Type");
+		table.append("</th>");
+		table.append("<th>");
+		table.append("Title");
+		table.append("</th>");
+		table.append("<th>");
+		table.append("Path");
+		table.append("</th>");
+		table.append("<th>");
+		table.append("References");
+		table.append("</th>");
+		table.append("</tr>");
+
+		for (CRXResult obj : objList) {
+
+			JSONArray references = null;
+			editoremail = obj.getUserEmailId();
+			LoggerUtil.debugLog(this.getClass(),
+					"processReportFromMap method editoremail is: "
+							+ editoremail);
+			String contentPath = obj.getParentPath();
+			LoggerUtil.debugLog(this.getClass(),
+					"processReportFromMap method contentPath is: "
+							+ contentPath);
+			String documentType = getTypeToUseInMail(obj.getPrimaryType());
+			LoggerUtil.debugLog(this.getClass(),
+					"processReportFromMap method documentType is: "
+							+ documentType);
+			String title = obj.getTitle();
+			LoggerUtil.debugLog(this.getClass(),
+					"processReportFromMap method title is: " + title);
+
+			JSONObject ref = obj.getReference();
+			JSONArray fullArray = ref.getJSONArray("pages");
+			if (fullArray.length() > 0
+					&& fullArray.getJSONObject(0).has("references")) {
+				references = fullArray.getJSONObject(0).getJSONArray(
+						"references");
+				LoggerUtil.debugLog(this.getClass(),
+						"processReportFromMap method references is: "
+								+ references.toString());
+			}
+
+			/**
+			 * for (int j = 0; j < references.length(); j++) {
+			 * LoggerUtil.debugLog(this.getClass(),"references: " +
+			 * references.get(j));
+			 * 
+			 * }
+			 */
+
+			table.append("<tr>");
+			table.append("<td>");
+			table.append(++k);
+			table.append("</td>");
+			table.append("<td>");
+			table.append(documentType);
+			table.append("</td>");
+			table.append("<td>");
+			table.append(title);
+			table.append("</td>");
+
+			if (documentType.equals(this.pageType)) {
+				table.append("<td>");
+				table.append("<a href='"
+						+ configService.getOnsiteAuthorBaseUrl() + contentPath
+						+ ".html" + "'>" + contentPath + "</a>");
+				table.append("</td>");
+			} else {
+				table.append("<td>");
+				table.append("<a href='"
+						+ configService.getOnsiteAuthorBaseUrl()
+						+ this.damadmin + contentPath + "'>" + contentPath
+						+ "</a>");
+				table.append("</td>");
+
+			}
+
+			if (null != references) {
+				referecesArray = parseReferenceJSONArray(session, item,
+						references);
+				if (!referecesArray.isEmpty()) {
+					table.append("<td>");
+					for (int refPath = 0; refPath < referecesArray.size(); refPath++) {
+
+						table.append("<a href='"
+								+ configService.getOnsiteAuthorBaseUrl()
+								+ referecesArray.get(refPath) + ".html" + "'>"
+								+ referecesArray.get(refPath) + "</a>");
+						table.append("<br>");
+					}
+					table.append("</td>");
+				} else {
+					table.append("<td>");
+					table.append("No references");
+					table.append("</td>");
+
+				}
+
+			} else {
+				table.append("<td>");
+				table.append("No references");
+				table.append("</td>");
+
+			}
+			table.append("</tr>");
+
+		}
+		table.append("</table>");
+
+		try {
+			sendEmail(table.toString(), lastEditor, editoremail, period);
+		} catch (ServiceException e) {
+			LoggerUtil
+					.errorLog(
+							this.getClass(),
+							"\n ContentExpirySendMailProcess: Exception in sendEmail() : {}",
+							e);
+			sendErrorNotification(e.getMessage(), session, item);
+		}
+
+		LoggerUtil.debugLog(this.getClass(),
+				"  processReportFromMap method ends");
+
+	}
+
+	private void processReportFromMultimap(WorkflowSession session,
+			WorkItem item, MultiMap multiMap, int period) throws JSONException {
+
+		LoggerUtil.debugLog(this.getClass(),
+				" Inside processReportFromMultimap method period  :" + period);
+		ArrayList<String> referecesArray = new ArrayList<String>();
+
+		if (!multiMap.isEmpty()) {
+			// String lastEditor=StringUtils.EMPTY;
+			StringBuilder table = new StringBuilder();
+			String editoremail = StringUtils.EMPTY;
+			int k = 0;
+			table.append("<table border='1' CELLPADDING='1' CELLSPACING='1' WIDTH='100%'>");
+			table.append("<tr class='header'>");
+			table.append("<th >");
+			table.append("Sr. No.");
+			table.append("</th>");
+			table.append("<th>");
+			table.append("Type");
+			table.append("</th>");
+			table.append("<th>");
+			table.append("Title");
+			table.append("</th>");
+			table.append("<th>");
+			table.append("Path");
+			table.append("</th>");
+			table.append("<th>");
+			table.append("References");
+			table.append("</th>");
+			table.append("</tr>");
+
+			@SuppressWarnings("unchecked")
+			Set<String> lastEditors = multiMap.keySet();
+			for (String lastEditor : lastEditors) {
+				LoggerUtil.debugLog(this.getClass(), "key : " + lastEditor);
+				LoggerUtil.debugLog(this.getClass(),
+						"values : " + multiMap.get(lastEditor));
+
+				@SuppressWarnings("unchecked")
+				List<CRXResult> objList = (List<CRXResult>) multiMap
+						.get(lastEditor);
+				for (CRXResult obj : objList) {
+
+					JSONArray references = null;
+					editoremail = obj.getUserEmailId();
+					LoggerUtil.debugLog(this.getClass(),
+							"processReportFromMap method editoremail is: "
+									+ editoremail);
+					String contentPath = obj.getParentPath();
+					LoggerUtil.debugLog(this.getClass(),
+							"processReportFromMap method contentPath is: "
+									+ contentPath);
+					String documentType = getTypeToUseInMail(obj
+							.getPrimaryType());
+					LoggerUtil.debugLog(this.getClass(),
+							"processReportFromMap method documentType is: "
+									+ documentType);
+					String title = obj.getTitle();
+					LoggerUtil.debugLog(this.getClass(),
+							"processReportFromMap method title is: " + title);
+					JSONObject ref = obj.getReference();
+					JSONArray fullArray = ref.getJSONArray("pages");
+
+					if (fullArray.length() > 0
+							&& fullArray.getJSONObject(0).has("references")) {
+						references = fullArray.getJSONObject(0).getJSONArray(
+								"references");
+						LoggerUtil.debugLog(this.getClass(),
+								"processReportFromMap method references is: "
+										+ references.toString());
+					}
+
+					/**
+					 * for (int j = 0; j < references.length(); j++) {
+					 * LoggerUtil.debugLog(this.getClass(),"references: " +
+					 * references.get(j));
+					 * 
+					 * }
+					 */
+
+					table.append("<tr>");
+					table.append("<td>");
+					table.append(++k);
+					table.append("</td>");
+					table.append("<td>");
+					table.append(documentType);
+					table.append("</td>");
+					table.append("<td>");
+					table.append(title);
+					table.append("</td>");
+					if (documentType.equals(this.pageType)) {
+						table.append("<td>");
+						table.append("<a href='"
+								+ configService.getOnsiteAuthorBaseUrl()
+								+ contentPath + ".html" + "'>" + contentPath
+								+ "</a>");
+						table.append("</td>");
+					} else {
+						table.append("<td>");
+						table.append("<a href='"
+								+ configService.getOnsiteAuthorBaseUrl()
+								+ this.damadmin + contentPath + "'>"
+								+ contentPath + "</a>");
+						table.append("</td>");
+
+					}
+
+					if (null != references) {
+						referecesArray = parseReferenceJSONArray(session, item,
+								references);
+						if (!referecesArray.isEmpty()) {
+							table.append("<td>");
+							for (int refPath = 0; refPath < referecesArray
+									.size(); refPath++) {
+
+								table.append("<a href='"
+										+ configService
+												.getOnsiteAuthorBaseUrl()
+										+ referecesArray.get(refPath) + ".html"
+										+ "'>" + referecesArray.get(refPath)
+										+ "</a>");
+								table.append("<br>");
+							}
+							table.append("</td>");
+						} else {
+							table.append("<td>");
+							table.append("No references");
+							table.append("</td>");
+
+						}
+					} else {
+						table.append("<td>");
+						table.append("No references");
+						table.append("</td>");
+
+					}
+					table.append("</tr>");
+
+				}
+
+			}
+
+			table.append("</table>");
+
+			try {
+
+				sendEmail(table.toString(), "Team", editoremail, period);
+			} catch (ServiceException e) {
+				LoggerUtil
+						.errorLog(
+								this.getClass(),
+								"\n ContentExpirySendMailProcess: Exception in sendEmail() : {}",
+								e);
+				sendErrorNotification(e.getMessage(), session, item);
+
+			}
+
+		}
+
+		LoggerUtil.debugLog(this.getClass(),
+				"  processReportFromMultimap method ends");
+
+	}
+
+	private List<String> populateEmailList(final WorkItem item,
+			final MetaDataMap args, final JackrabbitSession jrSession)
+			throws RepositoryException, AccessDeniedException,
+			UnsupportedRepositoryOperationException, ValueFormatException,
+			IllegalStateException {
+		LoggerUtil.debugLog(this.getClass(), "inside populateEmailList");
+		List<String> emailList = new ArrayList<String>();
+		List<String> emailsIds = extracted(item);
+		if (emailsIds != null && !emailsIds.isEmpty()) {
+			emailList.addAll(emailsIds);
+		} else {
+			String[] emailIds = args
+					.get(NODE_PROPERTY_EMAIL_ID, String[].class);
+			if (emailIds != null && emailIds.length > 0) {
+				LoggerUtil.debugLog(this.getClass(), "email ids"+emailIds);
+				emailList.addAll(Arrays.asList(emailIds));
+			}
+			String[] userGroups = args.get(USER_GROUP_LIST, String[].class);
+			if (userGroups != null) {
+				for (int i = 0; i < userGroups.length; i++) {
+					String authId = userGroups[i];
+					Authorizable auth = jrSession.getUserManager()
+							.getAuthorizable(authId);
+					if (auth.isGroup()) {
+						this.addGroupEmailsToList(emailList, auth);
+					} else {
+						this.addUserEmailToList(emailList, auth);
+					}
+				}
+			}
+		}
+		return emailList;
+	}
+
+	/**
+	 * Add the email id(s) available for the users of the group.
+	 * 
+	 * @param emailList
+	 *            The list to which emails have to be added.
+	 * @param auth
+	 *            The user for which email is to be fetched.
+	 * @throws RepositoryException
+	 *             the repository exception
+	 * @throws ValueFormatException
+	 *             the value format exception
+	 * @throws IllegalStateException
+	 *             the illegal state exception
+	 */
+	private void addGroupEmailsToList(final List<String> emailList,
+			final Authorizable auth) throws RepositoryException,
+			ValueFormatException, IllegalStateException {
+		LoggerUtil.debugLog(this.getClass(), "inside addGroupEmailsToList");
+		boolean isGroupMailAdded = this.addUserEmailToList(emailList, auth);
+		if (!isGroupMailAdded) {
+			Iterator<Authorizable> users = ((Group) auth).getMembers();
+			while (users.hasNext()) {
+				Authorizable authReceiver = users.next();
+				if (authReceiver.isGroup()) {
+					LoggerUtil.debugLog(this.getClass(),
+							"calling addGroupEmailsToList again authReceiver is "
+									+ authReceiver.toString());
+					this.addGroupEmailsToList(emailList, authReceiver);
+				} else {
+					this.addUserEmailToList(emailList, authReceiver);
+				}
+			}
+		}
+	}
+
+	/**
+	 * Add the email id(s) available for the user.
+	 * 
+	 * @param emailList
+	 *            The list to which email ids have to be added.
+	 * @param auth
+	 *            The user for which email is to be fetched.
+	 * @return {@code true} if the user was successfully added to list;
+	 * @throws RepositoryException
+	 *             the repository exception
+	 * @throws ValueFormatException
+	 *             the value format exception
+	 * @throws IllegalStateException
+	 *             the illegal state exception {@code false} if email was not
+	 *             available.
+	 */
+	private boolean addUserEmailToList(final List<String> emailList,
+			final Authorizable auth) throws RepositoryException,
+			ValueFormatException, IllegalStateException {
+		LoggerUtil.debugLog(this.getClass(), "inside addUserEmailToList method");
+		boolean emailAdded = false;
+		Value[] emails = auth
+				.getProperty(MailConstants.USER_PROPERTY_EMAIL_ADDRESS);
+		if (emails != null && emails.length > 0) {
+			for (int j = 0; j < emails.length; j++) {
+				emailList.add(emails[j].getString());
+			}
+			emailAdded = true;
+		}
+		return emailAdded;
+	}
+
+	@java.lang.SuppressWarnings("unchecked")
+	private ArrayList<String> extracted(final WorkItem item) {
+		LoggerUtil.debugLog(this.getClass(), "inside extracted method");
+		return (ArrayList<String>) item.getWorkflowData().getMetaDataMap()
+				.get(MailConstants.WORKFLOW_DATA_KEY_EMAIL_ADDRESS_LIST);
+	}
+
+	private void nullify() {
+		LoggerUtil.debugLog(this.getClass(), "inside nullify method");
+		this.emailRecipients = null;
+		this.systemAdminEmailIds = null;
+		this.contentAdminEmailIds = null;
+		this.groupEmailId = null;
+
+	}
+
+	private void errorInDeactivationNotificaion(ArrayList<String> paths) {
+		LoggerUtil.debugLog(this.getClass(),
+				"Inside errorInDeactivationNotificaion method");
+
+		String[] systemAdmin = configService.getAdminEmailId();
+		String templateDeactivationerror = "/etc/notification/email/thf/deactivationerror";
+		String failed = "Failed";
+		String status = "Deactivation Satus";
+		int pathNo = 0;
+		if (paths.size() > 0) {
+			StringBuilder table = new StringBuilder();
+			table.append("<table border='1' CELLPADDING='1' CELLSPACING='1' WIDTH='100%'>");
+			table.append("<tr class='header'>");
+			table.append("<th>");
+			table.append("Sr. No.");
+			table.append("</th>");
+			table.append("<th>");
+			table.append("Path");
+			table.append("</th>");
+			table.append("<th>");
+			table.append(status);
+			table.append("</th>");
+			table.append("</tr>");
+
+			for (int path = 0; path < paths.size(); path++) {
+				table.append("<tr>");
+				table.append("<td>");
+				table.append(++pathNo);
+				table.append("</td>");
+				if (paths.get(path).contains("/dam/")) {
+					table.append("<td>");
+					table.append("<a href='"
+							+ configService.getOnsiteAuthorBaseUrl()
+							+ this.damadmin + paths.get(path) + "'>"
+							+ paths.get(path) + "</a>");
+					table.append("</td>");
+
+				} else {
+					table.append("<td>");
+					table.append("<a href='"
+							+ configService.getOnsiteAuthorBaseUrl()
+							+ paths.get(path) + ".html" + "'>"
+							+ paths.get(path) + "</a>");
+					table.append("</td>");
+				}
+
+				table.append("<td>");
+				table.append(failed);
+				table.append("</td>");
+				table.append("</tr>");
+			}
+			table.append("</table>");
+			Map<String, Object> mailProperties = new HashMap<String, Object>();
+
+			mailProperties.put("salutation",
+					MailUtils.getServerInformation(configService));
+			mailProperties.put("contentTable", table.toString());
+			LoggerUtil
+					.debugLog(this.getClass(),
+							"Content expiry sending mail with template emailTemplateDeacivationError");
+			MailUtils.sendMail(templateDeactivationerror, removeDuplicateRecipients(systemAdmin),
+					mailProperties, genericMailService);
+			LoggerUtil.debugLog(this.getClass(),
+					"Error In Deactivation Notificaion sent successfully");
+		}
+
+		LoggerUtil.debugLog(this.getClass(),
+				"Exiting errorInDeactivationNotificaion method");
+
+	}
+
+	private String getTypeToUseInMail(String contentType) {
+		String title = null;
+		if (contentType.equals(cqPageContent)) {
+			title = this.pageType;
+		} else if (contentType.equals(damAssetContent)) {
+			title = this.docType;
+		} else {
+			title = contentType;
+
+		}
+		return title;
+
+	}
+
+	private ArrayList<String> parseReferenceJSONArray(WorkflowSession session,
+			WorkItem item, JSONArray references) {
+		LoggerUtil.debugLog(this.getClass(),
+				"Inside parseReferenceJSONArray method with param JSONArray references::"
+						+ references.toString());
+		ArrayList<String> refereceArray = new ArrayList<String>();
+		String referedPath = StringUtils.EMPTY;
+		String[] referencePathRoot = null;
+		String reference = StringUtils.EMPTY;
+		for (int ref = 0; ref < references.length(); ref++) {
+			try {
+
+				LoggerUtil.debugLog(this.getClass(),
+						"ref is:" + references.getString(ref));
+				referedPath = references.getString(ref);
+				referencePathRoot = referedPath.split(jcrContent, 2);
+				reference = referencePathRoot[0];
+
+				if (StringUtils.isNotBlank(reference)) {
+					refereceArray.add(reference);
+				}
+
+			} catch (JSONException e) {
+				LoggerUtil.errorLog(
+						this.getClass(),
+						"JSONException inside parseReferenceJSONArray"
+								+ e.getMessage());
+				sendErrorNotification(e.getMessage(), session, item);
+			}
+
+		}
+
+		return refereceArray;
+
+	}
+
+	public void sendErrorNotification(String errMessage,
+			WorkflowSession session, WorkItem item) {
+		LoggerUtil.debugLog(this.getClass(),
+				"Inside sendErrorNotification method");
+		String[] systemAdmin = configService.getAdminEmailId();
+		int num = 0;
+		String running = "RUNNING";
+		if (null != systemAdmin && systemAdmin.length > 0
+				&& StringUtils.isNotBlank(errMessage)) {
+			StringBuilder table = new StringBuilder();
+			table.append("<table border='1' CELLPADDING='1' CELLSPACING='1' WIDTH='100%'>");
+			table.append("<tr class='header'>");
+			table.append("<th>");
+			table.append("Sr. No.");
+			table.append("</th>");
+			table.append("<th>");
+			table.append("Exception");
+			table.append("</th>");
+			table.append("</tr>");
+
+			table.append("<tr>");
+
+			table.append("<td>");
+			table.append(++num);
+			table.append("</td>");
+
+			table.append("<td>");
+			table.append(errMessage);
+			table.append("</td>");
+
+			table.append("</tr>");
+
+			table.append("</table>");
+			Map<String, Object> mailProperties = new HashMap<String, Object>();
+
+			mailProperties.put("salutation",
+					MailUtils.getServerInformation(configService));
+			mailProperties.put("contentTable", table.toString());
+			LoggerUtil
+					.debugLog(
+							this.getClass(),
+							"Content expiry sending mail with template contentexpiryworkflowerrornotification");
+			MailUtils.sendMail(errorTemplate, removeDuplicateRecipients(systemAdmin), mailProperties,
+					genericMailService);
+			if (item.getWorkflow().getState().equalsIgnoreCase(running)) {
+				try {
+					session.terminateWorkflow(item.getWorkflow());
+				} catch (WorkflowException e) {
+					LoggerUtil.errorLog(this.getClass(),
+							"Exception while terminating workflow",
+							e.getMessage());
+				}
+			}
+			LoggerUtil.debugLog(this.getClass(),
+					"Error In Deactivation Notificaion sent successfully");
+
+		}
+
+		LoggerUtil.debugLog(this.getClass(),
+				"Exiting sendErrorNotification method");
+	}
+
+	
+	private String[] removeDuplicateRecipients(String[] recipients){
+		LoggerUtil.debugLog(this.getClass(),
+				"Inside removeDuplicateRecipients method with param recipients length:"+recipients.length);
+		List<String> recipientsList = new ArrayList<String>();
+
+		recipientsList.addAll(Arrays.asList(recipients));
+	    List<String> recipientsListFinal = new ArrayList<String>(new HashSet<String>(recipientsList)); 
+	    String[] finalMailRecipients = new String[recipientsListFinal.size()];
+	    finalMailRecipients= recipientsListFinal.toArray(finalMailRecipients);
+	    LoggerUtil.debugLog(this.getClass(),
+				"End of removeDuplicateRecipients method with return finalMailRecipients length: "+finalMailRecipients.length);
+		return finalMailRecipients;
+	}
+}

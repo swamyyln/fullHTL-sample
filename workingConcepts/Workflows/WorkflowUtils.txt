@@ -1,0 +1,865 @@
+package com.thehartford.thf.workflows;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import javax.jcr.AccessDeniedException;
+import javax.jcr.Node;
+import javax.jcr.PathNotFoundException;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.jcr.UnsupportedRepositoryOperationException;
+import javax.jcr.Value;
+import javax.jcr.ValueFormatException;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.jackrabbit.api.JackrabbitSession;
+import org.apache.jackrabbit.api.security.user.Authorizable;
+import org.apache.jackrabbit.api.security.user.UserManager;
+
+import com.day.cq.commons.jcr.JcrUtil;
+import com.day.cq.workflow.WorkflowException;
+import com.day.cq.workflow.WorkflowSession;
+import com.day.cq.workflow.exec.Route;
+import com.day.cq.workflow.exec.WorkItem;
+import com.day.cq.workflow.exec.Workflow;
+import com.day.cq.workflow.exec.WorkflowData;
+import com.day.cq.workflow.model.WorkflowModel;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.mail.impl.MailConstants;
+
+/**
+ * Utility related to common workflow functionality.
+ */
+public final class WorkflowUtils {
+
+    /** The Constant PERIOD. */
+    private static final String PERIOD = "period";
+
+    /** The constant USER_ADMIN. */
+    private static final String USER_ADMIN = "admin";
+
+    /** The constant USER_SYSTEM. */
+    private static final String USER_SYSTEM = "system";
+
+    /** The constant PATH. */
+    private static final String PATH = "path";
+
+    /** The constant JCR_PATH. */
+    private static final String JCR_PATH = "JCR_PATH";
+
+    /** The constant PREFIX_PAYLOAD. */
+    private static final String PREFIX_PAYLOAD = "payload.";
+
+    /** The constant DATA. */
+    private static final String DATA = "data";
+
+    /** The constant PREFIX_INITIATOR. */
+    private static final String PREFIX_INITIATOR = "initiator.";
+
+    /** The constant VERSION. */
+    private static final String VERSION = "version";
+
+    /** The constant PREFIX_MODEL. */
+    private static final String PREFIX_MODEL = "model.";
+
+    /** The constant STATE. */
+    private static final String STATE = "state";
+
+    /** The constant PREFIX_INSTANCE. */
+    private static final String PREFIX_INSTANCE = "instance.";
+
+    /** The constant PREFIX_DATA. */
+    private static final String PREFIX_DATA = "data.";
+
+    /** The constant PREFIX_TYPE. */
+    private static final String PREFIX_TYPE = "type";
+
+    /** The constant PREFIX_TITLE. */
+    private static final String PREFIX_TITLE = "title";
+
+    /** The constant PREFIX_TITLE. */
+    private static final String WFCOMMENT = "workflowComment";
+
+    /** The constant PREFIX_NODE. */
+    private static final String PREFIX_NODE = "node.";
+
+    /** The constant PREFIX_ID. */
+    private static final String PREFIX_ID = "id";
+
+    /** The constant PREFIX_ITEM. */
+    private static final String PREFIX_ITEM = "item.";
+
+    /** The constant PATH. */
+    private static final String LINK = "link";
+
+    /** The Constant SEARCH_NODE_TYPE. */
+    public static final String NODE_PAGE_TYPE = "cq:Page";
+
+    /** The Constant NODE_DAM_TYPE. */
+    public static final String NODE_DAM_TYPE = "cq:Asset";
+
+    /** The Constant DOT. */
+    public static final String DOT = ".";
+
+    /** The Constant HTML. */
+    public static final String HTML = "html";
+
+    /** The Constant JCR_TITLE. */
+    public static final String JCR_TITLE = "jcr:title";
+
+    /** The Constant METADATA. */
+    public static final String SLASH_METADATA = "/metaData";
+
+    /** The Constant DC_TITLE. */
+    public static final String DC_TITLE = "dc:title";
+
+    /** The Constant COMMENT. */
+    public static final String COMMENT = "comment";
+
+    /** The Constant HISTORY_ENTRY_PATH. */
+    public static final String HISTORY_ENTRY_PATH = "historyEntryPath";
+
+    /** The Constant DATA. */
+    public static final String SLASH_DATA = "/data";
+
+    /** The Constant START_COMMENT. */
+    public static final String START_COMMENT = "startComment";
+
+    /** The Constant HOST_URL_PREFIX. */
+    public static final String HOST_URL_PREFIX = "host.prefix";
+    /**
+     * Extended asset path.
+     */
+    private static final String EXTENDED_ASSET_PATH = "/jcr:content";
+
+    /**
+     * Makes a workflow transition from the current step to the specified route
+     * step. This method is mainly to be used when have an OR split in the
+     * workflow with 2-n steps available after the OR split.
+     * 
+     * @param item
+     *            the current step
+     * @param session
+     *            the workflow session
+     * @param step
+     *            the route step to follow
+     * @throws WorkflowException
+     *             to be handled by caller
+     */
+    public static void goToStep(final WorkItem item,
+            final WorkflowSession session, final int step)
+            throws WorkflowException {
+        try {
+            // get the available routes.
+            // choose the non-review one.
+            final List<Route> routes = session.getRoutes(item);
+            LoggerUtil.infoLog(WorkflowUtils.class, "Going to step : {}",
+                    routes.get(step).getName());
+            session.complete(item, routes.get(step));
+        } catch (final WorkflowException workflowException) {
+            LoggerUtil
+                    .errorLog(WorkflowUtils.class,
+                            "Error while transiting to Route"
+                                    + workflowException.getMessage(),
+                            workflowException);
+            throw new WorkflowException(workflowException);
+        }
+
+    }
+
+    /**
+     * Performs a workflow transition from the current step to a previous step.
+     * 
+     * @param item
+     *            the current step
+     * @param session
+     *            the workflow session
+     * @param targetRouteName
+     *            the name of the workflow route; if set to <tt>null</tt>, the
+     *            first available back route is selected
+     * @throws WorkflowException
+     *             to be handled by caller
+     */
+    public static void goBackToRoute(final WorkItem item,
+            final WorkflowSession session, final String targetRouteName)
+            throws WorkflowException {
+        try {
+            final List<Route> backRoutes = session.getBackRoutes(item);
+            if (backRoutes == null || backRoutes.size() == 0) {
+                LoggerUtil.infoLog(WorkflowUtils.class,
+                        "No back route available.", targetRouteName);
+                throw new WorkflowException("No back routes available.");
+            }
+            Route route = null;
+            if (targetRouteName == null || "".equals(targetRouteName.trim())) {
+                route = backRoutes.get(0);
+            } else {
+                for (final Route backRoute : backRoutes) {
+                    final String routeName = backRoute.getName();
+                    if (routeName.equals(targetRouteName)) {
+                        route = backRoute;
+                        break;
+                    }
+                }
+                if (route == null) {
+                    LoggerUtil.infoLog(WorkflowUtils.class,
+                            "No back route found.", targetRouteName);
+                }
+            }
+            if (route != null) {
+                session.complete(item, route);
+            } else {
+                LoggerUtil.infoLog(WorkflowUtils.class, "No back route found.",
+                        targetRouteName);
+            }
+        } catch (final WorkflowException workflowException) {
+            LoggerUtil.errorLog(WorkflowUtils.class, "Error while Routing",
+                    workflowException);
+            throw new WorkflowException(workflowException);
+        }
+    }
+
+    /**
+     * Performs a workflow transition from the current step to a previous step.
+     * 
+     * @param item
+     *            the current step
+     * @param session
+     *            the workflow session
+     * @param targetRouteName
+     *            the name of the workflow rout to select; if set to
+     *            <tt>null</tt>, the first
+     *            available back route is selected
+     * @throws WorkflowException
+     *             to be handled by caller
+     */
+    public static void goBack(final WorkItem item,
+            final WorkflowSession session, final String targetRouteName)
+            throws WorkflowException {
+        WorkflowUtils.goBackToRoute(item, session, targetRouteName);
+    }
+
+    /**
+     * Zip generator.
+     * 
+     * @param acrhivalPath
+     *            the acrhival path
+     * @param sourceDir
+     *            the source dir
+     */
+    public static void zipGenerator(String acrhivalPath, final String sourceDir) {
+        zipGenerator(acrhivalPath, sourceDir, false);
+    }
+    
+    /**
+     * Zip generator.
+     * 
+     * @param acrhivalPath
+     *            the acrhival path
+     * @param sourceDir
+     *            the source dir
+     */
+    public static void zipGenerator(String acrhivalPath, final String sourceDir, boolean moveFile) {
+    	File fileSource = null;
+        try {
+            // create object of FileOutputStream
+            acrhivalPath = acrhivalPath + File.separator;
+            // create File object from source directory
+            fileSource = new File(sourceDir);
+            final FileOutputStream fout = new FileOutputStream(acrhivalPath
+                    + WorkflowUtils.getCurrentDate());
+            // create object of ZipOutputStream from FileOutputStream
+            final ZipOutputStream zout = new ZipOutputStream(fout);
+            WorkflowUtils.addDirectory(zout, fileSource);
+            // close the ZipOutputStream
+            zout.close();
+        } catch (final IOException ioe) {
+            LoggerUtil.infoLog(WorkflowUtils.class, "IOException :" + ioe);
+		} finally {
+			if (fileSource != null && fileSource.exists()
+					&& fileSource.isFile() && moveFile) {
+				boolean status = fileSource.delete();
+				LoggerUtil.infoLog(WorkflowUtils.class,
+						"File deletion status for file [{}]: {}",
+						fileSource.getAbsolutePath(), status);
+			} else if (fileSource != null && fileSource.exists()
+					&& fileSource.isDirectory() && moveFile) {
+				for (File file : fileSource.listFiles()) {
+					boolean status = file.delete();
+					LoggerUtil.infoLog(WorkflowUtils.class,
+							"File deletion status for file [{}]: {}",
+							file.getAbsolutePath(), status);
+				}
+			}
+		}
+    }
+
+    /**
+     * Adds the directory.
+     * 
+     * @param zout
+     *            the zout
+     * @param fileSource
+     *            the file source
+     */
+    private static void addDirectory(final ZipOutputStream zout,
+            final File fileSource) {
+
+        // get sub-folder/files list
+        final File[] files = fileSource.listFiles();
+
+        for (int i = 0; i < files.length; i++) {
+            // if the file is directory, call the function recursively
+            if (files[i].isDirectory()) {
+                WorkflowUtils.addDirectory(zout, files[i]);
+                continue;
+            }
+
+            /*
+             * we are here means, its file and not directory, so
+             * add it to the zip file
+             */
+
+            try {
+
+                // create byte buffer
+                final byte[] buffer = WorkflowUtils.returnByteArray();
+
+                // create object of FileInputStream
+                final FileInputStream fin = WorkflowUtils
+                        .returnFileInputStream(files[i]);
+
+                zout.putNextEntry(WorkflowUtils.returnZipEntryObj(files[i]
+                        .getName()));
+
+                /*
+                 * After creating entry in the zip file, actually
+                 * write the file.
+                 */
+                int length;
+
+                while ((length = fin.read(buffer)) > 0) {
+                    zout.write(buffer, 0, length);
+                }
+
+                /*
+                 * After writing the file to ZipOutputStream, use
+                 * void closeEntry() method of ZipOutputStream class to
+                 * close the current entry and position the stream to
+                 * write the next entry.
+                 */
+
+                zout.closeEntry();
+
+                // close the InputStream
+                fin.close();
+
+            } catch (final IOException ioe) {
+                LoggerUtil.infoLog(WorkflowUtils.class, "IOException :" + ioe);
+            }
+        }
+
+    }
+
+    /**
+     * Start workflows for list of node paths with given workflow model.
+     * 
+     * @param paths
+     *            the paths
+     * @param workflowId
+     *            Workflow model ID
+     * @param workflowSession
+     *            the workflow session
+     */
+    public static void startWorkflows(final Map<String, Object> paths,
+            final String workflowId, final WorkflowSession workflowSession) {
+        try {
+            final WorkflowModel model = workflowSession.getModel(workflowId);
+            for (final Entry<String, Object> entry : paths.entrySet()) {
+                LoggerUtil.infoLog(WorkflowUtils.class,
+                        "Calling workflow::::::::: " + model.getTitle()
+                                + "::: For PayLaod::::" + entry.getValue());
+                final WorkflowData wfData = workflowSession.newWorkflowData(
+                        "JCR_PATH", entry.getValue());
+                workflowSession.startWorkflow(model, wfData);
+            }
+        } catch (final WorkflowException e) {
+            LoggerUtil.errorLog(WorkflowUtils.class,
+                    "Could not start workflows: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Start workflows for list of node paths with given workflow model for non
+     * JCR Payload.
+     * 
+     * @param paths
+     *            the paths
+     * @param workflowId
+     *            Workflow model ID
+     * @param workflowSession
+     *            the workflow session
+     */
+    public static void startWorkflowsForNonJCRPayLoad(
+            final Map<Integer, Object> paths, final String workflowId,
+            final WorkflowSession workflowSession) {
+        try {
+            final WorkflowModel model = workflowSession.getModel(workflowId);
+            /*
+             * TODO: RK| approach is changed for fetching user from LDAP, it is
+             * now on UID basis..
+             * Owner please discuss it with me.
+             */
+            for (final Entry<Integer, Object> entry : paths.entrySet()) {
+                final WorkflowData wfData = workflowSession.newWorkflowData(
+                        "URL", entry.getValue());
+                workflowSession.startWorkflow(model, wfData);
+            }
+        } catch (final WorkflowException workflowException) {
+            LoggerUtil
+                    .errorLog(
+                            ContentApprovalProcess.class,
+                            "Could not start workflows: "
+                                    + workflowException.getMessage(),
+                            workflowException);
+        }
+    }
+
+    /**
+     * Return byte array.
+     * 
+     * @return byte Array
+     */
+    private static byte[] returnByteArray() {
+
+        // create byte buffer
+        return new byte[1024];
+
+    }
+
+    /**
+     * Return file input stream.
+     * 
+     * @param file
+     *            the file
+     * @return the file input stream
+     * @throws FileNotFoundException
+     *             the file not found exception
+     */
+    private static FileInputStream returnFileInputStream(final File file)
+            throws FileNotFoundException {
+
+        // create byte buffer
+        return new FileInputStream(file);
+
+    }
+
+    /**
+     * Return zip entry obj.
+     * 
+     * @param fileName
+     *            the file name
+     * @return object of Zip Entry
+     */
+
+    private static ZipEntry returnZipEntryObj(final String fileName) {
+
+        // create byte buffer
+        return new ZipEntry(fileName);
+
+    }
+
+    /**
+     * Gets the current date.
+     * 
+     * @return the name of the ZIP file created with timestamp.
+     */
+
+    private static String getCurrentDate() {
+        return new SimpleDateFormat("yyyy_MM_dd_hhmm'.zip'", Locale.US)
+                .format(new Date());
+    }
+
+    /**
+     * Gets the frequency.
+     * 
+     * @param data
+     *            the data
+     * @param session
+     *            the session
+     * @return the frequency
+     */
+    protected static String getFrequency(final WorkflowData data,
+            final WorkflowSession session) {
+        String frequency = "";
+        try {
+            final String path = data.getPayload().toString() + "/jcr:content";
+            final Node node = (Node) session.getSession().getItem(path);
+            if (node != null) {
+                final Value v = node.getProperty(WorkflowUtils.PERIOD)
+                        .getValue();
+                frequency = v.getString();
+            }
+
+        } catch (final PathNotFoundException pathNotFoundException) {
+            LoggerUtil
+                    .errorLog(
+                            FtpDownload.class,
+                            "PathNotFoundException during "
+                                    + "getting the path of payload for finding frequncy : "
+                                    + pathNotFoundException);
+        } catch (final RepositoryException repositoryException) {
+            LoggerUtil.errorLog(FtpDownload.class,
+                    "RepositoryException during getting the path "
+                            + "of payload for finding frequncy : "
+                            + repositoryException);
+        }
+
+        LoggerUtil.infoLog(WorkflowUtils.class,
+                "The Frequency found in workflowUtil is " + frequency,
+                frequency);
+        return frequency;
+    }
+
+    /**
+     * Extract property.
+     * 
+     * @param node
+     *            the node
+     * @param property
+     *            the property
+     * @return the string
+     */
+    public static String extractProperty(final Node node, final String property) {
+        String name = StringUtils.EMPTY;
+        try {
+            if (node.hasProperty(property)
+                    && (node.getProperty(property).isMultiple())) {
+                final Value[] values = node.getProperty(property).getValues();
+                final StringBuilder sBuild = new StringBuilder();
+                for (int i = 0; i < values.length; i++) {
+                    if (i < (values.length - 1)) {
+                        sBuild.append(values[i].getString()).append(',');
+                    } else {
+                        sBuild.append(values[i].getString());
+                    }
+                }
+                name = sBuild.toString();
+            } else if (node.hasProperty(property)) {
+                name = node.getProperty(property).getString();
+            }
+        } catch (final PathNotFoundException pnfe) {
+            LoggerUtil.errorLog(JcrUtil.class,
+                    "PathNotFoundException exception "
+                            + "occured while getting property {0}: {1}",
+                    property, pnfe);
+        } catch (final ValueFormatException vfe) {
+            LoggerUtil.errorLog(JcrUtil.class,
+                    "ValueFormatException exception occured "
+                            + "while getting property {0}: {1}", property, vfe);
+        } catch (final RepositoryException rfe) {
+            LoggerUtil.errorLog(JcrUtil.class,
+                    "RepositoryException exception occured "
+                            + "while getting property {0}: {1}", property, rfe);
+        }
+        return name;
+    }
+
+    /**
+     * Set the properties in a map.
+     * 
+     * @param item
+     *            WorkItem
+     * @param session
+     *            the session
+     * @param hostPrefix
+     *            the host prefix
+     * @return mailProperties Map<String, Object>
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public static String[] setMailProperties(final WorkItem item,
+            final WorkflowSession session, final String hostPrefix)
+            throws RepositoryException {
+
+        String[] mailProperties = null;
+        final Map<String, Object> mailPropertiesmap = new HashMap<String, Object>();
+        Workflow workflow = null;
+        if (item != null) {
+            workflow = item.getWorkflow();
+        }
+
+        // add event type
+        if (null != workflow && null != workflow.getInitiator()) {
+            final String initiatorId = workflow.getInitiator();
+            final Authorizable localUser = WorkflowUtils.getAuthorizable(
+                    initiatorId, session.getSession());
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_INITIATOR, localUser);
+        }
+        if (item != null) {
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_ITEM
+                    + WorkflowUtils.PREFIX_ID, item.getId());
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_ITEM
+                    + WorkflowUtils.PREFIX_NODE + WorkflowUtils.PREFIX_ID, item
+                    .getNode().getId());
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_ITEM
+                    + WorkflowUtils.PREFIX_NODE + WorkflowUtils.PREFIX_TITLE,
+                    item.getNode().getTitle());
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_ITEM
+                    + WorkflowUtils.PREFIX_NODE + WorkflowUtils.PREFIX_TYPE,
+                    item.getNode().getType());
+
+            /* added for setting workflow comments */
+            if (null != item.getMetaDataMap().get(WorkflowUtils.COMMENT)) {
+                if (StringUtils.isEmpty(item.getMetaDataMap()
+                        .get(WorkflowUtils.COMMENT).toString())) {
+                    mailPropertiesmap.put(WorkflowUtils.PREFIX_ITEM
+                            + WorkflowUtils.PREFIX_DATA
+                            + WorkflowUtils.WFCOMMENT, "No Comments");
+                } else {
+                    mailPropertiesmap.put(WorkflowUtils.PREFIX_ITEM
+                            + WorkflowUtils.PREFIX_DATA
+                            + WorkflowUtils.WFCOMMENT, item.getMetaDataMap()
+                            .get(WorkflowUtils.COMMENT).toString());
+                }
+            } else {
+                if (null != item.getMetaDataMap().get(
+                        WorkflowUtils.HISTORY_ENTRY_PATH)
+                        && !(StringUtils.isEmpty(item.getMetaDataMap()
+                                .get(WorkflowUtils.HISTORY_ENTRY_PATH)
+                                .toString()))) {
+                    final Node tempMetaDataNode = session.getSession().getNode(
+                            item.getMetaDataMap()
+                                    .get(WorkflowUtils.HISTORY_ENTRY_PATH)
+                                    .toString());
+                    final String tempStartingNodePath = tempMetaDataNode
+                            .getParent()
+                            .getParent()
+                            .getPath()
+                            .concat(WorkflowUtils.SLASH_DATA
+                                    + WorkflowUtils.SLASH_METADATA);
+                    final Node tempStartingNode = session.getSession().getNode(
+                            tempStartingNodePath);
+                    final String startingNodeComment = WorkflowUtils
+                            .extractProperty(tempStartingNode,
+                                    WorkflowUtils.START_COMMENT);
+                    if (StringUtils.isEmpty(startingNodeComment)) {
+                        mailPropertiesmap.put(WorkflowUtils.PREFIX_ITEM
+                                + WorkflowUtils.PREFIX_DATA
+                                + WorkflowUtils.WFCOMMENT, "No Comments");
+                    } else {
+                        mailPropertiesmap.put(WorkflowUtils.PREFIX_ITEM
+                                + WorkflowUtils.PREFIX_DATA
+                                + WorkflowUtils.WFCOMMENT, startingNodeComment);
+                    }
+                }
+            }
+            if (null != workflow) {
+                WorkflowUtils.setMailPropertiesMap(session, mailPropertiesmap,
+                        workflow);
+            }
+
+            // hostPrefix = getHostPrefix();
+            mailPropertiesmap.put(WorkflowUtils.HOST_URL_PREFIX, hostPrefix);
+
+            mailProperties = new String[mailPropertiesmap.size()];
+            int index = 0;
+            for (final Map.Entry<String, Object> mapEntry : mailPropertiesmap
+                    .entrySet()) {
+                mailProperties[index] = mapEntry.getKey().toString()
+                        .concat("=").concat(mapEntry.getValue().toString());
+                index++;
+            }
+        }
+        return mailProperties;
+    }
+
+    /**
+     * Sets the mail properties map.
+     * 
+     * @param session
+     *            the session
+     * @param mailPropertiesmap
+     *            the mail propertiesmap
+     * @param workflow
+     *            the workflow
+     * @throws PathNotFoundException
+     *             the path not found exception
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    private static void setMailPropertiesMap(final WorkflowSession session,
+            final Map<String, Object> mailPropertiesmap, final Workflow workflow)
+            throws PathNotFoundException, RepositoryException {
+        String path;
+        mailPropertiesmap.put(WorkflowUtils.PREFIX_INSTANCE
+                + WorkflowUtils.PREFIX_ID, workflow.getId());
+        mailPropertiesmap.put(WorkflowUtils.PREFIX_INSTANCE
+                + WorkflowUtils.STATE, workflow.getState());
+        mailPropertiesmap.put(WorkflowUtils.PREFIX_MODEL
+                + WorkflowUtils.PREFIX_TITLE, workflow.getWorkflowModel()
+                .getTitle());
+        mailPropertiesmap.put(WorkflowUtils.PREFIX_MODEL
+                + WorkflowUtils.PREFIX_ID, workflow.getWorkflowModel().getId());
+        mailPropertiesmap.put(WorkflowUtils.PREFIX_MODEL
+                + WorkflowUtils.VERSION, workflow.getWorkflowModel()
+                .getVersion());
+        final WorkflowData workflowData = workflow.getWorkflowData();
+        mailPropertiesmap.put(
+                WorkflowUtils.PREFIX_PAYLOAD + WorkflowUtils.DATA,
+                workflowData.getPayload());
+        mailPropertiesmap.put(WorkflowUtils.PREFIX_PAYLOAD
+                + WorkflowUtils.PREFIX_TYPE, workflowData.getPayloadType());
+        if (WorkflowUtils.JCR_PATH.equals(workflowData.getPayloadType())) {
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_PAYLOAD
+                    + WorkflowUtils.PATH, workflowData.getPayload());
+        }
+        if (WorkflowUtils.JCR_PATH.equals(workflowData.getPayloadType())
+                && workflowData.getPayload().toString()
+                        .contains(WorkflowUtils.DOT)) {
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_PAYLOAD
+                    + WorkflowUtils.LINK, workflowData.getPayload().toString());
+        } else {
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_PAYLOAD
+                    + WorkflowUtils.LINK, workflowData.getPayload().toString()
+                    .concat(WorkflowUtils.DOT + WorkflowUtils.HTML));
+        }
+
+        path = workflowData.getPayload().toString();
+        final Node tempNode = session.getSession().getNode(path);
+        if (WorkflowUtils.isPage(tempNode)) {
+            path = workflowData.getPayload().toString()
+                    + WorkflowUtils.EXTENDED_ASSET_PATH;
+            final Node tempPageNode = session.getSession().getNode(path);
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_PAYLOAD
+                    + WorkflowUtils.PREFIX_TITLE, WorkflowUtils
+                    .extractProperty(tempPageNode, WorkflowUtils.JCR_TITLE));
+        } else if (WorkflowUtils.isAsset(tempNode)) {
+            path = workflowData.getPayload().toString()
+                    + WorkflowUtils.EXTENDED_ASSET_PATH + "/metadata";
+            final Node tempPageNode = session.getSession().getNode(path);
+            mailPropertiesmap.put(WorkflowUtils.PREFIX_PAYLOAD
+                    + WorkflowUtils.PREFIX_TITLE, WorkflowUtils
+                    .extractProperty(tempPageNode, WorkflowUtils.DC_TITLE));
+        } else {
+            path = workflowData.getPayload().toString();
+            mailPropertiesmap.put(PREFIX_PAYLOAD + PREFIX_TITLE, "No Title");
+        }
+    }
+
+    /**
+     * Get email address of the user.
+     * 
+     * @param user
+     *            Authorizable user
+     * @return primary email address of the user.
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public String getEmailAddress(final Authorizable user)
+            throws RepositoryException {
+        final Value[] emails = user
+                .getProperty(MailConstants.USER_PROPERTY_EMAIL_ADDRESS);
+        String emailId = StringUtils.EMPTY;
+        if (emails != null && emails.length > 0) {
+            emailId = emails[0].getString();
+        }
+        return emailId;
+    }
+
+    /**
+     * Get the authorized user id.
+     * 
+     * @param userId
+     *            userId
+     * @param repositorySession
+     *            the repository session
+     * @return the authorizable
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public static Authorizable getAuthorizable(final String userId,
+            final Session repositorySession) throws RepositoryException {
+        final UserManager manager = WorkflowUtils
+                .getUserManager(repositorySession);
+        String localUserId = userId;
+        if ((null != manager) && (null != localUserId)) {
+            if (WorkflowUtils.USER_SYSTEM.equals(localUserId)) {
+                localUserId = WorkflowUtils.USER_ADMIN;
+            }
+            return manager.getAuthorizable(localUserId);
+        } else {
+            LoggerUtil.infoLog(WorkflowUtils.class,
+                    "user manager or user id unavailable: {} - {}", manager,
+                    localUserId);
+        }
+        return null;
+    }
+
+    /**
+     * Get the UserManager.
+     * 
+     * @param session
+     *            Session
+     * @return UserManager
+     * @throws UnsupportedRepositoryOperationException
+     *             the unsupported repository operation exception
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    private static UserManager getUserManager(final Session session)
+            throws UnsupportedRepositoryOperationException, RepositoryException {
+        try {
+            final JackrabbitSession jrSession = (JackrabbitSession) session;
+            return jrSession.getUserManager();
+        } catch (final AccessDeniedException e) {
+            LoggerUtil.errorLog(WorkflowUtils.class,
+                    "could not get user manager: ", e);
+        }
+        return null;
+    }
+
+    /**
+     * Checks if is page.
+     * 
+     * @param node
+     *            the node
+     * @return true, if is page
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public static boolean isPage(final Node node) throws RepositoryException {
+        return (node.isNodeType(WorkflowUtils.NODE_PAGE_TYPE));
+    }
+
+    /**
+     * Checks if is asset.
+     * 
+     * @param node
+     *            the node
+     * @return true, if is asset
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public static boolean isAsset(final Node node) throws RepositoryException {
+        final String path = node.getPath();
+        if (StringUtils.startsWith(path, "/content/dam")) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+}

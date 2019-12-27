@@ -1,0 +1,49 @@
+The platform of Adobe Experience Manager 6.3 build on top of updated versions of the OSGi-based framework (Apache Sling and Apache Felix) 
+and the Java Content Repository: Apache Jackrabbit Oak 1.6.1.
+
+
+1 .Online Revision Cleanup with new Oak Segment Tar format - 
+
+Each update to the repository creates a new content revision and so the size of repository grows
+To avoid uncontrolled repository growth, old revisions need to be be cleaned up to free disk resources. 
+This maintenance functionality is called Revision Cleanup.It has been available as an offline routine since AEM 6.0.
+With AEM 6.3 an online version of this functionality called Online Revision Cleanup was introduced. 
+Compared to Offline Revision Cleanup where the AEM instance has to be shut down, 
+Online Revision Cleanup can be run while the AEM instance is online. 
+
+
+2. Oak Segment Tar File Format
+
+
+
+3. Time warp
+
+It allows you to see the page in different versions by adding a timewarp parameter to your page.
+If you want to access an older version of the page we can select the time of creation of that version and it will redirect to it.
+
+
+4. Content tree
+The Content Tree gives an overview of all of the components on the page in a hierarchy 
+so you can see at a glance how the page is composed.
+The Content Tree is a tab within the side panel (together with the components and assets browser)
+When you open the side panel it will slide open (from the left side). Select the Content Tree tab if necessary. 
+When open you can see a tree view representation of your page or template, so that it's easier to understand how its content is structured hierarchically. 
+Additionally on a complex page, it makes it easier to jump between components of the page.
+
+5. Workflow
+When you are using the page editor the status bar will show:
+The name of the workflow(s) being applied to the page; for example Request for Activation.
+Any actions available to the current user for the current step of the workflow; for example, Complete, Delegate, View details.
+The number of workflows that the page is subject to. You can:
+use the left/right arrows to navigate through the status information of the various workflows.
+click/tap on the actual number to open a drop down list of all applicable workflows, then select the workflow you want displayed in the status bar.
+
+
+
+6.page difference
+Page Difference feature can be also used to identify the difference between blueprints and livecopies, and blueprints and language copies.
+
+
+
+
+

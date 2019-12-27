@@ -1,0 +1,61 @@
+
+LDAP Provider Name=custom_ldap
+LDAP Server host Name=10.38.3.9
+LDAP Server port=636
+use SSL =check
+Bind DN =CN=thf,CN=Users,DC=adthf,DC=com
+Bind Password=xxxxx
+Search Time out=60s
+Admin pool max active=8
+Admin pool look up on validate=check
+User pool max active=8
+user pool look up on validate=check
+user base DN = OU=publish,OU=people,DC=adthf,DC=com
+user object classes=person
+user id attribute =userPrincipalName
+user extra filter=empty
+user DN Paths=empty
+group base DN = OU=publish,OU=group,DC=adthf,DC=com
+group object classes = group
+group name attribute =cn
+group extra filter=empty
+group DN Paths=empty
+
+-------------------------------
+Sync Handler name=default
+User expiration time=1h
+user auto membership =empty
+user property mapping=rep:fullname=cn
+user membership expiration=1h
+user membership nesting depth=0
+group expiration time=1d
+
+----------------------------------
+
+external login module
+JAAS Ranking =50
+JAAS Control flag=REQUIRED
+jaasRealm=empty
+Identity Provider Name=custom_ldap
+Sync handler name=default
+
+--------------------------------
+thf service for CRUD operations on LDAP
+
+ldap.group.distinguished.name=CN=%s,OU=author,OU=group,DC=adthf,DC=com
+ldap.user.distinguished.name=CN=%s,OU=author,OU=people,DC=adthf,DC=com
+ldap.host=10.38.3.9
+ldap.port=636
+ldap.loginDN=adthf\thfaduser
+ldap.password=xxxxxx
+min.pool=1
+max.pool=10
+trust-store-location=/usr/lib/jvm/java-1.7.0-openjdk-1.7.0.161-2.6.12.0.el7_4.x86_64/jre/lib/security/cacerts
+trust-store-password=xxxxxx
+jmx-ldapmbean=com.adobe.granite.ldap:host=10.40.3.100,port=636,type=Tools
+ldap.base.dn.name=OU=publish,OU=people,DC=adthf,DC=com
+-----------------------------------------
+
+
+
+

@@ -1,0 +1,565 @@
+
+package com.arche11.core.servlets;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.servlet.Servlet;
+import javax.servlet.ServletException;
+
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceUtil;
+import org.apache.sling.api.resource.ValueMap;
+import org.apache.sling.api.servlets.HttpConstants;
+import org.apache.sling.api.servlets.SlingAllMethodsServlet;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.day.cq.search.Predicate;
+import com.day.cq.search.PredicateGroup;
+import com.day.cq.search.Query;
+import com.day.cq.search.QueryBuilder;
+import com.day.cq.search.result.Hit;
+import com.day.cq.search.result.SearchResult;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
+
+@Component(service={Servlet.class},
+property={
+        Constants.SERVICE_DESCRIPTION + "=Predicate Servlet",
+        "sling.servlet.methods=" + HttpConstants.METHOD_GET,
+        //cq/Page
+        /*"sling.servlet.resourceTypes="+ "test/components/structure/page",
+        "sling.servlet.selectors=" + "swamyPredicate",*/
+        //"sling.servlet.extensions=" + "txt555" //(for plain text response)
+        "sling.servlet.extensions=" + "json", //(for json response)
+        "sling.servlet.paths="+"/bin/swamy/predicate"
+})
+public class PredicateServlet extends SlingAllMethodsServlet{
+	
+	private static final long serialVersionUID = 1L;
+/**
+	 * 
+	 */
+    private static final Logger log=LoggerFactory.getLogger(PredicateServlet.class);
+    
+    public static final String SEARCH_TAG = "tag";
+    public static final String SEARCH_TAGs = "tags";
+    public static final String SEARCH_PROPERTY = "property";
+    public static final String SEARCH_PROPERTY_CQ_TAGS = "cq:tags";
+    public static final String SEARCH_VALUE = "value";
+    public static final String PERCENTAGE = "%";
+    public static final String SEARCH_OPERATION = "operation";
+    public static final String SEARCH_OPERATION_LIKE = "like";
+    
+    JsonArray jsonarray = new JsonArray();
+
+    @Reference
+    QueryBuilder queryBuilder;
+   
+    @Override
+    protected void doGet(final SlingHttpServletRequest req,
+            final SlingHttpServletResponse resp) throws ServletException, IOException {
+    	int i=0;
+    	//resp.setContentType("text/plain");//(for plain text response)
+    	   ResourceResolver rr=req.getResourceResolver();
+    	   StringBuilder sb=new StringBuilder();
+    	   
+    	   Session querySession=rr.adaptTo(Session.class);
+    	   
+    	   Map<String,String> map=new HashMap<String,String>();
+    	   
+    	  /* Predicate tagPredicate=new Predicate(SEARCH_TAG, SEARCH_PROPERTY);
+    	   
+    	  
+    	   tagPredicate.set(SEARCH_PROPERTY, SEARCH_PROPERTY_CQ_TAGS);
+    	   tagPredicate.set(SEARCH_VALUE, "we-retail:season/winter"+PERCENTAGE);
+    	   tagPredicate.set(SEARCH_OPERATION, SEARCH_OPERATION_LIKE);
+    	   tagPredicate.set(SEARCH_TAG, SEARCH_TAGs);
+    	   tagPredicate.set("p.limit", "-1");*/
+    	   
+    	   map.put("path","/content/content");
+    	   map.put("p.limit","-1");
+    			   
+    	   
+    //Predicate pathPredicate=new Predicate("path").set("path", "/content/we-retail");
+    	   
+   /* Predicate donotSearchPath=new Predicate("path").set("path", "/content/we-retail/it");
+    
+    log.info("donotSearchType : "+ donotSearchPath.getType());
+    log.info("donotSearchPath : "+donotSearchPath.getPath());
+    log.info("donotSearchParameters : "+donotSearchPath.getParameters());
+    
+    PredicateGroup donotSearchGroup=new PredicateGroup();
+    donotSearchGroup.setNegated(true);
+    donotSearchGroup.add(donotSearchPath);
+    log.info("donotSearchGroup is negated :"+ donotSearchGroup.isNegated());*/
+    
+    PredicateGroup mySearchGroup=PredicateGroup.create(map);
+    //PredicateGroup combinedPredicateGroup=new PredicateGroup();
+    
+    //Update the combinedPredicateGroup
+   // combinedPredicateGroup.add(donotSearchGroup);
+   // combinedPredicateGroup.add(mySearchGroup);
+    
+    Query query=queryBuilder.createQuery(mySearchGroup,querySession);
+    
+    //query.getPredicates().add(tagPredicate);
+    
+    SearchResult result=query.getResult();
+    
+    log.info("Generated query is :"+result.getQueryStatement());
+    log.info("Result Pages of the query :"+result.getResultPages().size());
+    
+    for(Hit h:result.getHits()){
+    	i++;
+    	try {
+    		JsonObject jsonObject = new JsonObject();
+			Resource myQueryresoucre=h.getResource();
+			
+			ValueMap resValMap=ResourceUtil.getValueMap(myQueryresoucre);
+			jsonObject.addProperty("hitName "+i,myQueryresoucre.getName());
+			jsonObject.addProperty("hitType", myQueryresoucre.getResourceType().toString());
+			jsonObject.addProperty("hitPath", myQueryresoucre.getPath());
+			if(resValMap.containsKey("jcr:uuid")){
+			jsonObject.addProperty("hitUUID",resValMap.get("jcr:uuid", String.class));
+			}
+			
+			log.info("Resource "+i+" :"+myQueryresoucre.getPath());
+			
+			jsonarray.add(jsonObject);
+           //sb.append(myQueryresoucre.getPath());
+		} catch (RepositoryException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+    	
+    	
+    }
+    resp.setContentType("application/json");
+    resp.getOutputStream().println("My query Result-->"+jsonarray.toString());
+
+    
+    
+    }
+}
+------------------------------------------------------------------
+package com.thehartford.thf.core.dto;
+
+import java.util.Calendar;
+import java.util.Date;
+
+import javax.jcr.Node;
+import javax.jcr.PathNotFoundException;
+import javax.jcr.RepositoryException;
+import javax.jcr.Value;
+import javax.jcr.ValueFormatException;
+
+import org.apache.commons.lang.StringUtils;
+
+import com.day.cq.search.result.Hit;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.util.Constants;
+import com.thehartford.thf.core.util.SearchConstants;
+
+
+
+/**
+ * The DTO for holding search hit data.
+ * 
+ * @author SapientNitro
+ */
+public class SearchServiceScoreHit {
+
+    /** The Constant HTTP. */
+    private static final String HTTP = "http://";
+
+    /**
+     * Search description.
+     */
+    public static final String SEARCH_DESCRIPTION = "jcr:description";
+
+    /** The Constant ELLIPSIS. */
+    private static final String ELLIPSIS = "...";
+
+    /** The Constant MAX_LENGTH. */
+    private static final int MAX_LENGTH = 70;
+
+    /** The hit. */
+    private final Hit hit;
+
+    /** The keyword. */
+    private final String keyword;
+
+    // private String url;
+
+    /**
+     * Instantiates a new search service hit.
+     * 
+     * @param hit
+     *            the hit
+     * @param keyword
+     *            the keyword
+     */
+    public SearchServiceScoreHit(final Hit hit, final String keyword) {
+        this.hit = hit;
+        this.keyword = keyword;
+    }
+
+    /**
+     * Gets the title for the search result pages.
+     * 
+     * @return the title
+     * @throws RepositoryException
+     *             the repository exception
+     */
+	public String getTitle() throws RepositoryException {
+		String title = StringUtils.EMPTY;
+		if (this.isPage(this.hit.getNode().getParent())) {
+			// return page title
+			title = this.extractProperty(this.hit.getNode(),
+					SearchConstants.SEARCH_TITLE);
+		} else if (this.hit.getNode().getParent().getParent()
+				.isNodeType(SearchConstants.SEARCH_ASSET)) {
+			Node metaDataNode = this.hit.getNode();
+			title = this.extractProperty(metaDataNode,
+					SearchConstants.SEARCH_ASSET_TITLE);
+		} else {
+			title = this.hit.getTitle(); // return the title from HIT
+		}
+		return title;
+	}
+
+    /**
+     * Gets the excerpt i.e. the result page descriptions.
+     * 
+     * @return the excerpt
+     * @throws RepositoryException
+     *             the repository exception
+     */
+	public String getExcerpt() throws RepositoryException {
+		String description = StringUtils.EMPTY;
+		if (this.isPage(this.hit.getNode().getParent())) {
+			// return page description
+			// Fix for Defect Id: 1766112
+			description = this.getPageDescription(this.hit.getNode());
+		} else if (this.hit.getNode().getParent().getParent()
+				.isNodeType(SearchConstants.SEARCH_ASSET)) {
+			// return Asset description
+			Node metaDataNode = this.hit.getNode();
+			description = this.extractProperty(metaDataNode,
+					SearchConstants.SEARCH_ASSET_DESCRIPTION);
+		} else {
+			description = this.hit.getExcerpt(); // return the title from HIT
+		}
+		return description;
+	}
+
+    /**
+     * Gets the dam asset id.
+     * 
+     * @return the dam asset id
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public String getDamAssetId() throws RepositoryException {
+        String damID = StringUtils.EMPTY;
+        if (this.hit.getNode().getParent().getParent().isNodeType(SearchConstants.SEARCH_ASSET)) {
+                Node metaDataNode = this.hit.getNode();
+                damID = this.extractProperty(metaDataNode,
+                        SearchConstants.SEARCH_DCUUID);
+        }
+        return damID;
+    }
+
+    /**
+     * Gets the string value for the dc property.
+     * 
+     * @param node
+     *            The node for which property is to be fetched.
+     * @param property
+     *            The property to be fetched.
+     * @return The corrected string value for the property.
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    private String extractProperty(final Node node, final String property)
+            throws RepositoryException {
+        String title = StringUtils.EMPTY;
+        try {
+            if (node.hasProperty(property)
+                    && (node.getProperty(property).isMultiple())) {
+                final Value[] values = node.getProperty(property).getValues();
+                final StringBuilder sBuild = new StringBuilder();
+                for (int i = 0; i < values.length; i++) {
+                    if (i < (values.length - 1)) {
+                        sBuild.append(values[i].getString()).append(',');
+                    } else {
+                        sBuild.append(values[i].getString());
+                    }
+                }
+                title = sBuild.toString();
+            } else if (node.hasProperty(property)) {
+                title = node.getProperty(property).getString();
+            }
+        } catch (final PathNotFoundException pnfe) {
+            LoggerUtil
+                    .errorLog(
+                            this.getClass(),
+                            "PathNotFoundException exception occured while getting property {0}: {1}",
+                            property, pnfe);
+        } catch (final ValueFormatException vfe) {
+            LoggerUtil
+                    .errorLog(
+                            this.getClass(),
+                            "ValueFormatException exception occured while getting property {0}: {1}",
+                            property, vfe);
+        }
+        return title;
+    }
+
+    /**
+     * Gets the page description.
+     * 
+     * @param node
+     *            the node
+     * @return the page description
+     * @throws PathNotFoundException
+     *             the path not found exception
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    private String getPageDescription(final Node jcrContentNode)
+            throws PathNotFoundException, RepositoryException {
+        String description = StringUtils.EMPTY;
+        if (jcrContentNode.hasProperty(SearchConstants.SEARCH_DESCRIPTION)) {
+        	description = jcrContentNode.getProperty(SearchConstants.SEARCH_DESCRIPTION)
+                    .getString();
+        }
+        return description;
+    }
+
+    /**
+     * Gets the node path.
+     * 
+     * @return the node path
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public Node getNode() throws RepositoryException {
+        return this.getPageOrAsset();
+    }
+
+    /**
+     * Checks if is page or asset.
+     * 
+     * @param node
+     *            the node
+     * @return true, if is page or asset
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    private boolean isPageOrAsset(final Node node) throws RepositoryException {
+        return (this.isPage(node))
+                || (node.isNodeType(SearchConstants.SEARCH_ASSET));
+    }
+
+    /**
+     * Checks if is page.
+     * 
+     * @param node
+     *            the node
+     * @return true, if is page
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public boolean isPage(final Node node) throws RepositoryException {
+        return (node.isNodeType(SearchConstants.SEARCH_NODE_PAGE_TYPE))
+                || (node.isNodeType(SearchConstants.SEARCH_PSUEDOPAGE));
+    }
+    
+    /**
+     * Checks if is page content.
+     * 
+     * @param node
+     *            the node
+     * @return true, if is page
+     * @throws RepositoryException
+     *             the repository exception
+     */
+	public boolean isPageContent(final Node node) throws RepositoryException {
+		return (node.getParent()
+				.isNodeType(SearchConstants.SEARCH_NODE_PAGE_TYPE))
+				|| (node.getParent()
+						.isNodeType(SearchConstants.SEARCH_PSUEDOPAGE));
+	}
+
+    /**
+     * Gets the page or asset which is used to create url and get title..
+     * 
+     * @return the page or asset
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public Node getPageOrAsset() throws RepositoryException {
+
+        Node node = this.hit.getNode();
+        while ((!this.isPageOrAsset(node)) && (node.getName().length() > 0)) {
+            node = node.getParent();
+        }
+        return node;
+    }
+
+    /**
+     * Gets the tag list.
+     * 
+     * @return the tag list
+     * @throws RepositoryException
+     *             the repository exception
+     */
+	public String getTagList() throws RepositoryException {
+		String tag = StringUtils.EMPTY;
+		if (this.isPageContent(this.hit.getNode())) {
+			// return page tags
+			this.extractProperty(this.hit.getNode().getParent(),
+					SearchConstants.SEARCH_PROPERTY_CQ_TAGS);
+		} else if (this.hit.getNode().getParent().getParent()
+				.isNodeType(SearchConstants.SEARCH_ASSET)) {
+			// return Asset tags
+			Node metaDataNode = this.hit.getNode();
+			tag = this.extractProperty(metaDataNode,
+					SearchConstants.SEARCH_PROPERTY_CQ_TAGS);
+		}
+		return tag;
+	}
+
+    /**
+     * Gets the page title.
+     * 
+     * @return the page title
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public String getPageTitle() throws RepositoryException {
+        final Node node = this.getNode();
+        String title = null;
+        if (this.isPage(node)) {
+            final Node childNode = node.getNode(SearchConstants.SEARCH_CONTENT);
+            // title = JcrUtil.getPropertyString(childNode,
+            // Constants.JCR_TITLE);
+            title = StringUtils.isEmpty(childNode.getProperty(
+                    Constants.JCR_TITLE).getString()) ? StringUtils.EMPTY
+                    : childNode.getProperty(Constants.JCR_TITLE).getString();
+        }
+        return this.truncate(title, SearchServiceScoreHit.MAX_LENGTH);
+    }
+
+    /**
+     * Truncate.
+     * 
+     * @param value
+     *            the String
+     * @param length
+     *            the integer
+     * @return the String value
+     */
+    public String truncate(final String value, final int length) {
+        String truncatedValue = null;
+        if (!StringUtils.isEmpty(value) && value.length() > length) {
+            truncatedValue = value.substring(0, length).concat(
+                    SearchServiceScoreHit.ELLIPSIS);
+        }
+        return truncatedValue;
+    }
+
+    /**
+     * Gets the hit.
+     * 
+     * @return the hit
+     */
+    public Hit getHit() {
+        return this.hit;
+    }
+
+    /**
+     * Gets the keyword.
+     * 
+     * @return the keyword
+     */
+    public String getKeyword() {
+        return this.keyword;
+    }
+
+    /**
+     * Gets the published date.
+     * 
+     * @return the published date
+     * @throws RepositoryException
+     *             the repository exception
+     */
+    public Date getPublishedDate() throws RepositoryException {
+        Date publishedDate = null;
+        if (this.hit.getProperties() != null
+                && this.hit.getProperties().get(SearchConstants.SEARCH_LASTREP) != null) {
+            publishedDate = ((Calendar) this.hit.getProperties().get(
+                    SearchConstants.SEARCH_LASTREP)).getTime();
+        }
+
+        return publishedDate;
+    }
+
+    /**
+     * Gets the broadridge link.
+     * 
+     * @return the broadridge link
+     * @throws RepositoryException
+     *             the repository exception
+     */
+	public String getBroadridgeLink() throws RepositoryException {
+		// String broadridgeLink = StringUtils.EMPTY;
+		String broadridgeLink = StringUtils.EMPTY;
+		final StringBuffer buffer = new StringBuffer();
+		if (this.hit.getNode().getParent().getParent()
+				.isNodeType(SearchConstants.SEARCH_ASSET)) {
+			// return Asset title
+			Node metaDataNode = this.hit.getNode();
+			broadridgeLink = this.extractProperty(metaDataNode,
+					SearchConstants.EXTERNAL_LINK_URL);
+			if (StringUtils.isNotBlank(broadridgeLink)
+					&& !broadridgeLink.startsWith(SearchServiceScoreHit.HTTP)) {
+				buffer.append(SearchServiceScoreHit.HTTP);
+				buffer.append(broadridgeLink);
+				broadridgeLink = buffer.toString();
+			}
+		}
+		return broadridgeLink;
+	}
+
+    /**
+     * Gets the page title for search suggestion.
+     * 
+     * @return the page title for search suggestion
+     * @throws RepositoryException
+     *             the repository exception
+     */
+	public String getPageTitleForSearchSuggestion() throws RepositoryException {
+		final Node node = this.getNode();
+		String title = null;
+		if (this.isPage(node)) {
+			title = StringUtils.isEmpty(node.getProperty(Constants.JCR_TITLE)
+					.getString()) ? StringUtils.EMPTY : node.getProperty(
+					Constants.JCR_TITLE).getString();
+		}
+		return title;
+	}
+}

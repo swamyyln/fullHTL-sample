@@ -1,0 +1,3118 @@
+/*********************************************************************
+ * Copyright (c) 2015, Hartford Funds, Radnor, 19087, USA
+ * All rights reserved.
+ * This software is the confidential and proprietary information of
+ * Hartford Funds ("Confidential Information").
+ * You shall not disclose such Confidential Information and shall
+ * use it only in accordance with the terms of the license agreement
+ * you entered into with Hartford Funds.
+ *********************************************************************/
+
+package com.thehartford.thf.integration.ldap.service.impl;
+
+import java.io.UnsupportedEncodingException;
+import java.lang.management.ManagementFactory;
+import java.util.ArrayList;
+import java.util.Dictionary;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.List;
+
+import javax.management.JMX;
+import javax.management.MBeanServerConnection;
+import javax.management.MalformedObjectNameException;
+import javax.management.ObjectName;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.felix.scr.annotations.Component;
+import org.apache.felix.scr.annotations.Property;
+import org.apache.felix.scr.annotations.Reference;
+import org.apache.felix.scr.annotations.Service;
+import org.osgi.service.component.ComponentContext;
+
+import com.adobe.granite.crypto.CryptoSupport;
+import com.day.ldap.LDAPAttribute;
+import com.day.ldap.LDAPAttributeSet;
+import com.day.ldap.LDAPConnection;
+import com.day.ldap.LDAPEntry;
+import com.day.ldap.LDAPException;
+import com.day.ldap.LDAPModification;
+import com.day.ldap.LDAPModificationSet;
+import com.day.ldap.LDAPSearchResults;
+import com.day.ldap.util.ConnectionPool;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.util.EncryptionUtil;
+import com.thehartford.thf.core.util.UUIDUtil;
+import com.thehartford.thf.integration.common.PersistenceConstants;
+import com.thehartford.thf.integration.common.exception.InitializationException;
+import com.thehartford.thf.integration.common.exception.LDAPServerException;
+import com.thehartford.thf.integration.ldap.dto.UserProfileDTO;
+import com.thehartford.thf.integration.ldap.service.LDAPService;
+import com.thehartford.thf.integration.ldap.service.LDAPUserMBean;
+import com.thehartford.thf.integration.persistence.db.model.User;
+import com.thehartford.thf.integration.ssl.LDAPSSLSocketFactory;
+
+/**
+ * LDAP Service implementation for CRUD operation on a directory server.
+ */
+@Component(label = "THF LDAP Service",
+        description = "Service for CRUD operations on LDAP", metatype = true,
+        immediate = true)
+@Service(LDAPService.class)
+public class LDAPServiceImpl implements LDAPService {
+
+    /** The crypto support. */
+    @Reference
+    private CryptoSupport cryptoSupport;
+
+    /** The Constant GROUP_DISTINGUISHED_NAME. */
+    @Property(label = "Distinguished name for the groups",
+            description = "Distinguished name for the groups")
+    private static final String GROUP_DISTINGUISHED_NAME = "ldap.group.distinguished.name";
+
+    /** Distinguished name for the groups. */
+    private String groupDistinguishedName;
+
+    /** The Constant USER_DISTINGUISHED_NAME. */
+    @Property(label = "Distinguished name for the users",
+            description = "Distinguished name for the users")
+    private static final String USER_DISTINGUISHED_NAME = "ldap.user.distinguished.name";
+
+    /** Distinguished name for the users. */
+    private String userDistinguishedName;
+
+    /** The Constant LDAP_HOST. */
+    @Property(label = "LDAP Host",
+            description = "Host Address of the AD server")
+    private static final String LDAP_HOST = "ldap.host";
+
+    /** The ldap host. */
+    private String ldapHost;
+
+    /** The Constant LDAP_PORT. */
+    @Property(label = "LDAP Port",
+            description = "Host Address port of the AD server")
+    private static final String LDAP_PORT = "ldap.port";
+
+    /** The ldap port. */
+    private String ldapPort;
+
+    /** The Constant LDAP_LOGIN_DN. */
+    @Property(label = "LDAP Username",
+            description = "Username of the LDAP Admin")
+    private static final String LDAP_LOGIN_DN = "ldap.loginDN";
+
+    /** The ldap login dn. */
+    private String ldapLoginDN;
+
+    /** The Constant LDAP_PASSWORD. */
+    @Property(label = "LDAP Password",
+            description = "Password to login to AD server")
+    private static final String LDAP_PASSWORD = "ldap.password";
+
+    /** The ldap password. */
+    private String ldapPassword;
+
+    /** The Constant MIN_POOL_SIZE. */
+    @Property(label = "Min Connection Pool Size",
+            description = "Min connections available to the pool", value = "1")
+    private static final String MIN_POOL_SIZE = "min.pool";
+
+    /** The min pool size. */
+    private String minPoolSize;
+
+    /** The Constant MAX_POOL_SIZE. */
+    @Property(label = "Max Connection Pool Size",
+            description = "Max connections available to the pool", value = "10")
+    private static final String MAX_POOL_SIZE = "max.pool";
+
+    /** The max pool size. */
+    private String maxPoolSize;
+
+    /** Location of trust store. */
+    @Property(
+            label = "Java TrustStore Location on OS",
+            description = "Java TrustStore Location on OS where SSL certificates are stored")
+    private static final String TRUST_STORE_LOC = "trust-store-location";
+    /**
+     * Location of trust store.
+     */
+    private String trustStoreLocation;
+
+    /** password of trust store. */
+    @Property(
+            label = "Java TrustStore password in JDK",
+            description = "Java TrustStore password in JDK for SSL certificates")
+    private static final String TRUST_STORE_PWD = "trust-store-password";
+    /**
+     * password of trust store.
+     */
+    private String trustStorePwd;
+
+    /** JMX LDAPMBean felix console property. */
+    @Property(label = "JMX LDAPMBean",
+            description = "JMX LDAPMBean Object Name")
+    private static final String MBEAN_OBJECT_NAME = "jmx-ldapmbean";
+    
+    
+    /** JMX LDAPMBean felix console property. */
+    @Property(label = "Base DN",
+            description = "LDAP Base DN Name")
+    private static final String LDAP_BASE_DN_NAEME = "ldap.base.dn.name";
+    
+    /** Distinguished name . */
+    private String distinguishedName;
+
+    /** JMX LDAPMBean. */
+    private String mbeanObjectName;
+
+    // Configurable Properties Ends.
+
+    /**
+     * Connection pool reference. This is being initialized in activate method.
+     */
+    private ConnectionPool connectionPool;
+
+    /**
+     * LDAPSSLSocketFactory reference for use with LDAP connections.
+     */
+    private LDAPSSLSocketFactory sslSocketFactory;
+
+    /**
+     * Life cycle method of {@link LDAPServiceImpl}. This method automatically
+     * gets invoked whenever bundle is deployed or configurations changed.
+     * 
+     * @param context
+     *            the context
+     * @throws InitializationException
+     *             the initialization exception
+     */
+    protected void activate(final ComponentContext context)
+            throws InitializationException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "activate starts");
+        Dictionary<?, ?> props = context.getProperties();
+        this.ldapHost = (String) props.get(LDAP_HOST);
+        this.ldapLoginDN = (String) props.get(LDAP_LOGIN_DN);
+        this.ldapPassword = EncryptionUtil.decryptServiceConfig(
+                (String) props.get(LDAP_PASSWORD), this.cryptoSupport);
+        this.ldapPort = (String) props.get(LDAP_PORT);
+        this.minPoolSize = (String) props.get(MIN_POOL_SIZE);
+        this.maxPoolSize = (String) props.get(MAX_POOL_SIZE);
+        this.groupDistinguishedName = (String) props
+                .get(GROUP_DISTINGUISHED_NAME);
+        this.userDistinguishedName = (String) props
+                .get(USER_DISTINGUISHED_NAME);
+        this.trustStoreLocation = (String) props.get(TRUST_STORE_LOC);
+        this.trustStorePwd = EncryptionUtil.decryptServiceConfig(
+                (String) props.get(TRUST_STORE_PWD), this.cryptoSupport);
+        this.mbeanObjectName = (String) props.get(MBEAN_OBJECT_NAME);
+        this. distinguishedName = (String) props.get(LDAP_BASE_DN_NAEME);
+        try {
+            this.sslSocketFactory = new LDAPSSLSocketFactory(
+                    this.trustStoreLocation, this.trustStorePwd);
+            this.connectionPool = this.initConnectionPool();
+        } catch (LDAPServerException ex) {
+            LoggerUtil.errorLog(LDAPServiceImpl.class,
+                    PersistenceConstants.LDAP_CONNECTION_ERROR_ARG.getValue(),
+                    ex.fillInStackTrace());
+            throw new InitializationException(
+                    PersistenceConstants.LDAP_CONNECTION_ERROR.getValue(), ex);
+        } catch (Exception e) {
+            LoggerUtil.errorLog(LDAPServiceImpl.class,
+                    PersistenceConstants.LDAP_CONNECTION_ERROR_ARG.getValue(),
+                    e.fillInStackTrace());
+            throw new InitializationException(
+                    PersistenceConstants.LDAP_CONNECTION_ERROR.getValue(), e);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "activate ends");
+    }
+
+    /**
+     * Life cycle method of {@link LDAPServiceImpl}. This method automatically
+     * gets invoked whenever bundle is un-deployed or the configurations are
+     * changed.
+     * 
+     * @param context
+     *            the context
+     */
+    protected void deactivate(final ComponentContext context) {
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "deactivate starts");
+        // Destroying the LDAP connection pool.
+        this.connectionPool.destroy();
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "deactivate ends");
+    }
+
+    // Configurable Properties Ends.
+
+    /**
+     * This method create a user on LDAP.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @return the user profile dto
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public UserProfileDTO createUserProfile(UserProfileDTO userProfileDTO)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start createUserProflie :: {}", userProfileDTO);
+        this.validateUid(userProfileDTO.getUid());
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            LDAPAttributeSet attributeSet = new LDAPAttributeSet();
+            // set user attributes.
+            this.handleUserAttributes(userProfileDTO, attributeSet);
+            // Handle roles
+            this.handleRoles(userProfileDTO, attributeSet);
+            // handle password - do not set in case of HIFP user.
+            if (StringUtils.isEmpty(userProfileDTO.getUserType())) {
+                this.handlePassword(userProfileDTO, attributeSet);
+            }
+            // handle roles and crdNumber scenarios.
+            this.handleRolesAndCRDNumber(userProfileDTO, attributeSet);
+            // add user to LDAP as a RDN - relative distinguished name.
+            Integer uid = userProfileDTO.getUid();
+            String uidString = String.valueOf(uid.intValue());
+            String userContainer = String.format(this.userDistinguishedName,
+                    uidString);
+            this.addUser(userContainer, connection, attributeSet);
+            // assign the newly created user to group/s.
+            this.addUserToGroup(userProfileDTO, connection, attributeSet,
+                    userContainer);           
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End createUserProflie !!");
+        return userProfileDTO;
+    }
+    
+    /**
+     * This method create a user on LDAP.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @return the user profile dto
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public UserProfileDTO createSubscribedOnlyUserProfile(UserProfileDTO userProfileDTO)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start createSubscribedOnlyUserProfile :: {}", userProfileDTO);
+        this.validateUid(userProfileDTO.getUid());
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            LDAPAttributeSet attributeSet = new LDAPAttributeSet();
+            // set user attributes.
+            this.handleUserAttributes(userProfileDTO, attributeSet);
+            // Handle roles
+            this.handleRoles(userProfileDTO, attributeSet);
+            Integer uid = userProfileDTO.getUid();
+            String uidString = String.valueOf(uid.intValue());
+            String userContainer = String.format(this.userDistinguishedName,
+                    uidString);
+            this.addUser(userContainer, connection, attributeSet);
+            // assign the newly created user to group/s.
+            this.addUserToGroup(userProfileDTO, connection, attributeSet,
+                    userContainer);
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End createSubscribedOnlyUserProfile !!");
+        return userProfileDTO;
+    }
+
+    /**
+     * Creates the user proflie from HIFP data.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @return UserProfileDTO
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public UserProfileDTO createHIFPUserProfile(UserProfileDTO userProfileDTO)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start createHIFPUserProfile :: {}", userProfileDTO);
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            LDAPAttributeSet attributeSet = new LDAPAttributeSet();
+            // set user attributes.
+            this.handleUserAttributes(userProfileDTO, attributeSet);
+            // Handle roles
+            this.handleRoles(userProfileDTO, attributeSet);
+            // handle roles and crdNumber scenarios.
+            this.handleHIFPRolesAndCRDNumber(userProfileDTO, attributeSet);
+            // add user to LDAP as a RDN - relative distinguished name.
+            Integer uid = userProfileDTO.getUid();
+            String uidString = String.valueOf(uid.intValue());
+            String userContainer = String.format(this.userDistinguishedName,
+                    uidString);
+            this.addUser(userContainer, connection, attributeSet);
+            // assign the newly created user to group/s.
+            this.addUserToGroup(userProfileDTO, connection, attributeSet,
+                    userContainer);
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End createHIFPUserProfile!");
+        return userProfileDTO;
+    }
+
+    /**
+     * This method update a user profile on LDAP.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @return the user profile dto
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public UserProfileDTO updateUserProfile(UserProfileDTO userProfileDTO)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start updateUserProfile :: {}", userProfileDTO);
+        Integer uid = userProfileDTO.getUid();
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            LDAPModificationSet modificationSet = new LDAPModificationSet();
+            String userDN = String.format(this.userDistinguishedName,
+                    String.valueOf(uid.intValue()));
+            // Update user attributes.
+            boolean isEmailChanged = this.updateUserAttributes(userProfileDTO,
+                    modificationSet);
+            // Roles from front end.
+            String[] roles = userProfileDTO.getRoles();
+            this.handleRoles(roles, modificationSet);
+            // get entry from LDAP.
+            LDAPEntry entry = connection.read(userDN);
+            String[] ldapRoles = this.handleLDAPRoles(userProfileDTO,
+                    modificationSet, entry);
+            // Modify attributes stored in modificationSet.
+            connection.modify(userDN, modificationSet);
+            // handle the group membership as per new roles.
+            this.handleGroupMembership(connection, userDN, roles, ldapRoles);
+            // everything went fine, update email with currentEmail.
+            if (isEmailChanged) {
+                userProfileDTO.setEmail(userProfileDTO.getCurrentEmail());
+            }
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End updateUserProfile");
+        return userProfileDTO;
+    }
+
+    
+    /**
+     * This method update a user profile on LDAP.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @return the user profile dto
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public UserProfileDTO updateUserProfileWithPassword(UserProfileDTO userProfileDTO)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start updateUserProfileWithPassword :: {}", userProfileDTO);
+        Integer uid = userProfileDTO.getUid();
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            LDAPModificationSet modificationSet = new LDAPModificationSet();
+            String userDN = String.format(this.userDistinguishedName,
+                    String.valueOf(uid.intValue()));
+            // Update user attributes.
+           
+            // Roles from front end.
+            String[] roles = userProfileDTO.getRoles();
+            this.handleRoles(roles, modificationSet);
+            // get entry from LDAP.
+            LDAPEntry entry = connection.read(userDN);
+            
+            boolean isEmailChanged = this.updateUserAttributesPreRegistration(userProfileDTO,
+                    modificationSet);
+            
+            String[] ldapRoles = this.handleLDAPRoles(userProfileDTO,
+                    modificationSet, entry);
+            LDAPAttribute attributePwd = this.handlePassword(userProfileDTO);	
+            modificationSet.add(LDAPModification.REPLACE, attributePwd);
+            // Modify attributes stored in modificationSet.
+            connection.modify(userDN, modificationSet);
+            
+           // this.addUser(userDN, connection, attributeSet);
+            
+            // handle the group membership as per new roles.
+            this.handleGroupMembership(connection, userDN, roles, ldapRoles);
+            // everything went fine, update email with currentEmail.
+            if (isEmailChanged) {
+                userProfileDTO.setEmail(userProfileDTO.getCurrentEmail());
+            }
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End updateUserProfile");
+        return userProfileDTO;
+    }
+    
+    /**
+     * This method reads the user profile attributes from LDAP and populates a
+     * DTO and returns back to the caller.
+     * 
+     * @param uid
+     *            the uid
+     * @return UserProfileDTO
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public UserProfileDTO getUserProfile(String uid) throws LDAPServerException {
+       // LoggerUtil.infoLog(LDAPServiceImpl.class,
+         //       "Start getUserProfile : User id: {}", uid);
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            LDAPAttributeSet attributeSet = this.getUserAttributes(uid,
+                    connection);
+            // Populate UserProfileDTO with attributes fetched from LDAP.
+            UserProfileDTO profileDTO = new UserProfileDTO();
+            // Get all the attributes.
+            this.getPersonalInfo(attributeSet, profileDTO);
+            // get roles and preferred role.
+            this.getRoles(attributeSet, profileDTO);
+            // get official info e.g company name.
+            this.getOfficialInfo(attributeSet, profileDTO);
+            // get subject details from LDAP.
+            this.getSubject(attributeSet, profileDTO);
+            // get address from LDAP.
+            this.getAddressDetails(attributeSet, profileDTO);
+            return profileDTO;
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+    }
+
+    /**
+     * This method checks if a user exists in LDAP.
+     * 
+     * @param uid
+     *            the uid
+     * @return a boolean value basis on user exists or not.
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public boolean isUserExists(String uid) throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start isUserExists : User id: {}", uid);
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        boolean isExists;
+        try {
+            connection = this.connectionPool.getConnection();
+            String userDN = String.format(this.userDistinguishedName, uid);
+            connection.read(userDN);
+            isExists = true;
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            isExists = false;
+        } finally {
+            this.closeConnection(connection);
+        }
+        return isExists;
+    }
+    
+    
+    
+    /**
+     * This method checks if a user exists in LDAP.
+     * 
+     * @param uid
+     *            the uid
+     * @return a boolean value basis on user exists or not.
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public String checkAndUnLock(User user) throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start checkAndUnLock : User id: {}", user.getUid());
+        //this.validateUid(uid);
+        LDAPConnection connection = null;         
+   	    LDAPSearchResults searchResults = null;   	    
+        String userUnlock = "failed";
+        String[] myAttrs = null ; 
+        try {
+            connection = this.connectionPool.getConnection();           
+            if(connection !=null){
+            String myBaseDN = this.distinguishedName;
+            LoggerUtil.debugLog(this.getClass(), "distinguished name, user Distinguished name {}{}", myBaseDN,this.userDistinguishedName);
+            String  myFilter="(&(objectCategory=Person)(objectClass=User)(userPrincipalName="+user.getUserName()+")(lockoutTime>=1))";
+            LoggerUtil.debugLog(this.getClass(), "user filter -- {}", myFilter);
+            searchResults = connection.search(myBaseDN, 1, myFilter,myAttrs,false);
+         	if(searchResults!=null){
+         		int count = 0;
+         		while(searchResults.hasMoreElements()){
+         			LoggerUtil.debugLog(this.getClass(), "search results is not null {}", searchResults.getCount());
+ 					LDAPEntry myEntry = searchResults.next(); 					
+ 					String email=(String) myEntry.getAttributeSet().getAttribute(PersistenceConstants.USER_PRINCIPAL_NAME.getValue()).getStringValues().nextElement();
+ 					if(email.equalsIgnoreCase(user.getUserName())){
+ 						count++;
+ 						String userDN = String.format(this.userDistinguishedName,
+ 								String.valueOf(user.getUid()));
+ 	                    LoggerUtil.infoLog(this.getClass(),userDN);
+ 						LDAPAttribute unlockAttribute = new LDAPAttribute(
+ 			                    PersistenceConstants.USER_ACCOUNT_LOCKED_PROPERTY.getValue(),
+ 			                    PersistenceConstants.USER_ACCOUNT_UNLOCK_VAL.getValue());
+ 							
+ 							LDAPModificationSet modificationSet = new LDAPModificationSet();
+ 							modificationSet.add(LDAPModification.REPLACE, unlockAttribute);
+ 							
+ 							
+ 							connection.modify(userDN, modificationSet);
+ 							
+ 							userUnlock = "success";
+ 	                        LoggerUtil.infoLog(this.getClass(),"User DN"+userDN + "Unlock status"+userUnlock);
+ 						
+ 						break;
+ 					}
+         		}
+ 					if(count == 0){
+ 						userUnlock ="NotLocked";
+ 						
+ 					}
+ 					
+                    
+					
+         	}else{
+         		LoggerUtil.debugLog(this.getClass(), "search results is  null " );
+         			userUnlock ="notLocked";
+         		}
+            }	
+            else{
+            	LoggerUtil.infoLog(this.getClass(),"connection is null {}", connection);
+            }
+            
+				
+        }catch (LDAPException ex){
+        	LoggerUtil.errorLog(this.getClass(),"LDAP Exception {} {}", ex.getLDAPErrorMessage(),ex.getLDAPResultCode());
+        	throw new LDAPServerException (ex.getLDAPErrorMessage());
+        }
+        finally {
+            this.closeConnection(connection);           
+        }
+        return userUnlock;   
+    }
+
+
+    /**
+     * This method reset a user password on LDAP.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @return the user profile dto
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public UserProfileDTO resetPassword(UserProfileDTO userProfileDTO)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "Start resetPassword :: {}",
+                userProfileDTO);
+        Integer uid = userProfileDTO.getUid();
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            String userDN = String.format(this.userDistinguishedName,
+                    String.valueOf(uid.intValue()));
+            LDAPEntry entry = connection.read(userDN);
+            LDAPAttribute resetPwdKeyAttr = entry
+                    .getAttribute(PersistenceConstants.RESET_PWD_KEY.getValue());
+            LDAPAttribute attributePwd = this.handlePassword(userProfileDTO);
+            LDAPAttribute attributePwdHint = this
+                    .handlePasswordHint(userProfileDTO);
+            // Handle change password.
+            if (attributePwdHint != null) {
+                LDAPModification[] modifications = {
+                        new LDAPModification(LDAPModification.REPLACE,
+                                attributePwd),
+                        new LDAPModification(LDAPModification.REPLACE,
+                                attributePwdHint), };
+                connection.modify(userDN, modifications);
+            } else if (resetPwdKeyAttr != null) { // Handle reset password.
+                LDAPModification[] modifications = {
+                        new LDAPModification(LDAPModification.REPLACE,
+                                attributePwd),
+                        new LDAPModification(LDAPModification.DELETE,
+                                resetPwdKeyAttr), };
+                connection.modify(userDN, modifications);
+            } else {
+                /*
+                 * means password hint is not given and this is not a reset
+                 * request. change password w/o password hint.
+                 */
+                connection.modify(userDN, new LDAPModification(
+                        LDAPModification.REPLACE, attributePwd));
+            }
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End resetPassword :: {}",
+                userProfileDTO);
+        return userProfileDTO;
+    }
+
+    /**
+     * This method returns a UUID to the caller, UUID will be used in the the
+     * reset password functionality.
+     * 
+     * @param uid
+     *            the uid
+     * @return UUID
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public String getResetPwdKey(String uid) throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start getResetPwdKey :: uid : {}", uid);
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        String uuid = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            String userDN = String.format(this.userDistinguishedName, uid);
+            // Check if the attribute exists
+            String[] attributes = { PersistenceConstants.RESET_PWD_KEY
+                    .getValue(), };
+            LDAPEntry entry = connection.read(userDN, attributes);
+            LDAPAttribute attrResetPwdKey = entry
+                    .getAttribute(PersistenceConstants.RESET_PWD_KEY.getValue());
+            if (attrResetPwdKey == null) {
+                uuid = UUIDUtil.getRandomUUID();
+                LDAPAttribute attribute = new LDAPAttribute(
+                        PersistenceConstants.RESET_PWD_KEY.getValue(), uuid);
+                LDAPModification ldapModification = new LDAPModification(
+                        LDAPModification.ADD, attribute);
+                connection.modify(userDN, ldapModification);
+            } else {
+                uuid = (String) attrResetPwdKey.getStringValues().nextElement();
+            }
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End getResetPwdKey");
+        return uuid;
+    }
+
+    /**
+     * This method validates the userName and UUID from AD.
+     * 
+     * @param uid
+     *            the uid
+     * @param resetPwdKey
+     *            the reset pwd key
+     * @return a flag indicating the entry found or not.
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public boolean validateResetPwdKey(String uid, String resetPwdKey)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start validateResetPwdKey: uid {}", uid);
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        boolean validated = false;
+        try {
+            connection = this.connectionPool.getConnection();
+            String userDN = String.format(this.userDistinguishedName, uid);
+            String[] attributes = { PersistenceConstants.RESET_PWD_KEY
+                    .getValue(), };
+            LDAPEntry entry = connection.read(userDN, attributes);
+            LDAPAttribute resetPwdKeyAttr = entry
+                    .getAttribute(PersistenceConstants.RESET_PWD_KEY.getValue());
+            validated = (resetPwdKeyAttr == null ? false : resetPwdKeyAttr
+                    .getStringValues().nextElement().equals(resetPwdKey));
+            LoggerUtil.infoLog(LDAPServiceImpl.class,
+                    "validateResetPwdKey: {}", validated);
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        return validated;
+    }
+
+    /**
+     * This method reset the activation status on LDAP.
+     * 
+     * @param uid
+     *            the uid
+     * @param activationStatus
+     *            the activation status
+     * @return the user activationStatus
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public String updateActivationStatus(String uid, String activationStatus)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start updateActivationtionStatus :: uid {}", uid);
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            String userDN = String.format(this.userDistinguishedName, uid);
+            LDAPAttribute attribute = new LDAPAttribute(
+                    PersistenceConstants.ACTIVATION_STATUS.getValue(),
+                    activationStatus);
+            LDAPModification ldapModification = new LDAPModification(
+                    LDAPModification.REPLACE, attribute);
+            connection.modify(userDN, ldapModification);
+            return PersistenceConstants.STATUS_SUCCESS.getValue();
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+    }
+    
+    /**
+     * This method reset the activation status on LDAP.
+     * 
+     * @param uid
+     *            the uid
+     * @param activationStatus
+     *            the activation status
+     * @return the user activationStatus
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public String updateAcountDisabledStatus(String uid, String activationStatus)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start updateActivationtionStatus :: uid {}", uid);
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            String userDN = String.format(this.userDistinguishedName, uid);
+            LDAPAttribute attribute = new LDAPAttribute(
+                    PersistenceConstants.USER_ACCOUNT_CTRL.getValue(),
+                    PersistenceConstants.USER_ACCOUNT_DISABLE_CTRL_VAL.getValue());
+            LDAPModification ldapModification = new LDAPModification(
+                    LDAPModification.REPLACE, attribute);
+            connection.modify(userDN, ldapModification);
+            return PersistenceConstants.STATUS_SUCCESS.getValue();
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+    }
+
+    /**
+     * This method fetches the lastLogon attribute of a user from LDAP.
+     * 
+     * @param uid
+     *            user whose lastLogon attribute has to be retrieved.
+     * @return the last logon
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public String getLastLogon(String uid) throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start getLastLogon :: uid : {}", uid);
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        String lastLogon = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            String userDN = String.format(this.userDistinguishedName, uid);
+            String[] attributes = { PersistenceConstants.LAST_LOGON.getValue(), };
+            LDAPEntry entry = connection.read(userDN, attributes);
+            LDAPAttribute lastLogonAttr = entry
+                    .getAttribute(PersistenceConstants.LAST_LOGON.getValue());
+            if (lastLogonAttr != null) {
+                lastLogon = (String) lastLogonAttr.getStringValues()
+                        .nextElement();
+            }
+            LoggerUtil.infoLog(LDAPServiceImpl.class,
+                    "lastLogon for-> {} : {}", uid, lastLogon);
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End getLastLogon");
+        return lastLogon;
+    }
+
+    /**
+     * This method fetches the badPwdCount attribute of a user from LDAP.
+     * 
+     * @param uid
+     *            user whose badPwdCount attribute has to be retrieved.
+     * @return the bad pwd count
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public String getBadPwdCount(String uid) throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start getBadPwdCount :: uid : {}", uid);
+        this.validateUid(uid);
+        LDAPConnection connection = null;
+        String badPwdCount = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            String userDN = String.format(this.userDistinguishedName, uid);
+            String[] attributes = { PersistenceConstants.BAD_PWD_COUNT
+                    .getValue(), };
+            LDAPEntry entry = connection.read(userDN, attributes);
+            LDAPAttribute badPwdCountAttr = entry
+                    .getAttribute(PersistenceConstants.BAD_PWD_COUNT.getValue());
+            if (badPwdCountAttr != null) {
+                badPwdCount = (String) badPwdCountAttr.getStringValues()
+                        .nextElement();
+            }
+            LoggerUtil.infoLog(LDAPServiceImpl.class,
+                    "badPwdCount for-> {} : {} ", uid, badPwdCount);
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End getBadPwdCount");
+        return badPwdCount;
+    }
+
+    /**
+     * This method expires all user accounts by setting their accountExpires
+     * attribute.
+     * 
+     * @param userList
+     *            list of all users whose accounts has to be expired.
+     * @param expiryTime
+     *            time when user is going to expire.
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public void expireUserAccount(List<String> userList, String expiryTime)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "Start expireUserAccount");
+        LDAPConnection connection = null;
+        try {
+            connection = this.connectionPool.getConnection();
+            if (userList != null) {
+                for (String uid : userList) {
+                    String userDN = String.format(this.userDistinguishedName,
+                            uid);
+                    String[] attributes = { PersistenceConstants.ACCOUNT_EXPIRES
+                            .getValue(), };
+                    LDAPEntry entry = connection.read(userDN, attributes);
+                    LDAPAttribute accountExpiresAttr = entry
+                            .getAttribute(PersistenceConstants.ACCOUNT_EXPIRES
+                                    .getValue());
+                    if (accountExpiresAttr != null
+                            && PersistenceConstants.ACCOUNT_EXPIRES_NUMBER
+                                    .getValue().equals(
+                                            accountExpiresAttr
+                                                    .getStringValues()
+                                                    .nextElement())) {
+                        LDAPAttribute accExpiresAttr = this
+                                .getAccountExpiresAttribute(expiryTime);
+                        LDAPModification ldapModification = this
+                                .getLDAPModificationReplace(accExpiresAttr);
+                        connection.modify(userDN, ldapModification);
+                    }
+                }
+            }
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End expireUserAccount");
+    }
+
+    /**
+     * This method authenticate a user from LDAP.
+     *
+     * @param userProfileDTO the user profile dto
+     * @return the user profile dto
+     * @throws LDAPServerException the lDAP server exception
+     */
+    @Override
+    public UserProfileDTO authenticateUser(UserProfileDTO userProfileDTO)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start authenticateUser : {}", userProfileDTO);
+        this.validateInputs(userProfileDTO);
+        LDAPConnection connection = null;
+        try {
+            String currentPassword = userProfileDTO.getCurrentPassword();
+            if (StringUtils.isNotBlank(currentPassword)) {
+                connection = new LDAPConnection(this.sslSocketFactory);
+                connection.connect(this.ldapHost,
+                        Integer.parseInt(this.ldapPort));
+                connection.bind(Integer.parseInt(PersistenceConstants.LDAP_VER
+                        .getValue()), this.ldapLoginDN, this.ldapPassword);
+                String rdn = String.format(this.userDistinguishedName,
+                        String.valueOf(userProfileDTO.getUid().intValue()));
+                LoggerUtil.infoLog(LDAPServiceImpl.class,
+                        "RDN to authenticate: {}", rdn);
+                // Check if this user can login to LDAP.
+                connection.authenticate(rdn, currentPassword);
+                boolean isAuthenticated = connection.isAuthenticated();
+				LoggerUtil.infoLog(LDAPServiceImpl.class,
+						"isAuthenticated: {}", isAuthenticated);
+				/*
+				 * if the control is here means userName and currentPassword
+				 * validated at LDAP, set the authentication status.
+				 */
+                userProfileDTO.setAuthenticated(isAuthenticated);
+            } else {
+                LoggerUtil.errorLog(LDAPServiceImpl.class,
+                        "currentPassword is null or empty!!");
+            }
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            if (connection != null) {
+                try {
+                    connection.disconnect();
+                } catch (LDAPException lex) {
+                    this.logLDAPException(lex);
+                }
+            }
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, "End authenticateUser :: {}",
+                userProfileDTO);
+        return userProfileDTO;
+    }
+
+    /**
+     * This method fetches the list of all the users who are Financial Advisors
+     * and whose crdNumber doesn't match with the crdNumber from FA table.
+     * 
+     * @param crdNumberList
+     *            from FA table.
+     * @return List of all FA user whose crdNumber doesn't match with the
+     *         crdNumber from FA table
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+    @Override
+    public List<String> getInvalidCRDUserList(List<?> crdNumberList)
+            throws LDAPServerException {
+        LoggerUtil.infoLog(LDAPServiceImpl.class,
+                "Start :: getInvalidCRDUserList");
+        LDAPConnection connection = null;
+        List<String> deactivatedUserList = new ArrayList<String>();
+        try {
+            connection = this.connectionPool.getConnection();
+            String faGroupDN = String.format(this.groupDistinguishedName,
+                    PersistenceConstants.FINANCIAL_ADVISORS.getValue());
+            String[] attributes = { PersistenceConstants.MEMBER.getValue() };
+            LDAPEntry entry = connection.read(faGroupDN, attributes);
+            LDAPAttribute memeberOfFAAttr = entry
+                    .getAttribute(PersistenceConstants.MEMBER.getValue());
+            Enumeration<?> memberAttrValues = memeberOfFAAttr.getStringValues();
+            while (memberAttrValues.hasMoreElements()) {
+                String faUserDN = (String) memberAttrValues.nextElement();
+                /*
+                 * based on the user FA domain name get the list of the user
+                 * required to be deactivated.
+                 */
+                String[] attributesFA = {
+                        PersistenceConstants.INDIVIDUAL_CRD.getValue(),
+                        PersistenceConstants.USER_PRINCIPAL_NAME.getValue() };
+                LDAPEntry entryFA = connection.read(faUserDN, attributesFA);
+                LDAPAttributeSet faUserAttributeSet = entryFA.getAttributeSet();
+                LDAPAttribute crdAttribute = faUserAttributeSet
+                        .getAttribute(PersistenceConstants.INDIVIDUAL_CRD
+                                .getValue());
+                if (crdAttribute != null) {
+                    String crdNumber = (String) crdAttribute.getStringValues()
+                            .nextElement();
+					/*
+					 * Check if the crdNumber from FA Table doesn't match with
+					 * the crdNumber in LDAP.
+					 */
+                    if (!crdNumberList.contains(crdNumber)) {
+                        LoggerUtil
+                                .infoLog(
+                                        LDAPServiceImpl.class,
+                                        "crdNumber from LDAP : {} doesn't match with crdNumber from FA table",
+                                        crdNumber);
+                        deactivatedUserList.add((String) faUserAttributeSet
+                                .getAttribute(
+                                        PersistenceConstants.UID.getValue())
+                                .getStringValues().nextElement());
+                    }
+                }
+            }
+        } catch (LDAPException lex) {
+            this.logLDAPException(lex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), lex);
+        } finally {
+            this.closeConnection(connection);
+        }
+        LoggerUtil.infoLog(LDAPServiceImpl.class, " End getInvalidCRDUserList");
+        return deactivatedUserList;
+    }
+
+    /**
+     * Method use JMX for EJ user sync from LDAP to CRX.
+     *
+     * @param uid the uid
+     * @return boolean status if the user is sync or not.
+     * @throws LDAPServerException the lDAP server exception
+     */
+    public boolean syncUserToCrx(String uid) throws LDAPServerException {
+        boolean isUserSynchronized = false;
+        try {
+            String userRDN = String.format(this.userDistinguishedName, uid);
+            LoggerUtil.infoLog(LDAPServiceImpl.class, "RDN to sync: {}",
+                    userRDN);
+            LDAPUserMBean ldapUserMBean = this.initLDAPUserMBean();
+            if (ldapUserMBean != null) {
+                ldapUserMBean.syncUser(userRDN);
+                isUserSynchronized = true;
+                LoggerUtil
+                        .infoLog(LDAPServiceImpl.class, "user sync complete!");
+            } else {
+                LoggerUtil.infoLog(LDAPServiceImpl.class,
+                        "user sync failed as ldapUserMBean not available!");
+            }
+        } catch (Exception ex) {
+            LoggerUtil.errorLog(LDAPServiceImpl.class,
+                    "Exception in user sync: {}", ex);
+            throw new LDAPServerException(
+                    PersistenceConstants.LDAP_EXCEPTION.getValue(), ex);
+        }
+        return isUserSynchronized;
+    }
+
+    /**
+     * Initialize an LDAPAttribute.
+     * 
+     * @param groupContainer
+     *            the group container
+     * @return {@link LDAPAttribute}
+     */
+    private LDAPAttribute getLDAPAttribute(String groupContainer) {
+        return new LDAPAttribute(PersistenceConstants.MEMBER_OF.getValue(),
+                groupContainer);
+    }
+
+    /**
+     * Initialize an LDAPModification with ADD operation.
+     * 
+     * @param memberAttr
+     *            the member attr
+     * @return {@link LDAPModification}
+     */
+    private LDAPModification getLDAPModificationAdd(LDAPAttribute memberAttr) {
+        return new LDAPModification(LDAPModification.ADD, memberAttr);
+    }
+
+    /**
+     * Initialize an LDAPModification with DELETE operation.
+     * 
+     * @param memberAttr
+     *            the member attr
+     * @return {@link LDAPModification}
+     */
+    private LDAPModification getLDAPModificationDelete(LDAPAttribute memberAttr) {
+        return new LDAPModification(LDAPModification.DELETE, memberAttr);
+    }
+
+    /**
+     * Initialize an LDAPModification with REPLACE operation.
+     * 
+     * @param attribute
+     *            the attribute
+     * @return {@link LDAPModification}
+     */
+    private LDAPModification getLDAPModificationReplace(LDAPAttribute attribute) {
+        return new LDAPModification(LDAPModification.REPLACE, attribute);
+    }
+
+    /**
+     * This method returns accountExpires LDAPAttribute.
+     * 
+     * @param expiryTime
+     *            the expiry time
+     * @return {@link LDAPAttribute}
+     */
+    private LDAPAttribute getAccountExpiresAttribute(String expiryTime) {
+        return new LDAPAttribute(
+                PersistenceConstants.ACCOUNT_EXPIRES.getValue(), expiryTime);
+    }
+
+    /**
+     * Gets the connection pool.
+     * 
+     * @return the connectionPool
+     */
+    public ConnectionPool getConnectionPool() {
+        return this.connectionPool;
+    }
+
+    /**
+     * Sets the connection pool.
+     * 
+     * @param connectionPool
+     *            the connectionPool to set
+     */
+    public void setConnectionPool(ConnectionPool connectionPool) {
+        this.connectionPool = connectionPool;
+    }
+
+    /**
+     * This method close the LDAPConnection.
+     * 
+     * @param connection
+     *            the connection
+     */
+    private void closeConnection(LDAPConnection connection) {
+        //LoggerUtil.infoLog(LDAPServiceImpl.class,"In finally : closing LDAPConnection!!!");
+        this.connectionPool.close(connection);
+    }
+
+    /**
+     * This methods checks if the uid passed is null or empty or 0, if so throw
+     * the IllegalArgumentException immediately.
+     * 
+     * @param uid
+     *            the uid
+     */
+    private void validateUid(String uid) {
+        if (StringUtils.isBlank(uid)
+                || StringUtils.equals(uid,
+                        PersistenceConstants.ZERO_VALUE.getValue())) {
+            throw new IllegalArgumentException(
+                    "uid cannot be null or empty or zero !!");
+        }
+    }
+
+    /**
+     * This methods checks if the uid passed is null or 0, if so throw the
+     * IllegalArgumentException immediately.
+     * 
+     * @param uid
+     *            the uid
+     */
+    private void validateUid(Integer uid) {
+        if (uid == null || uid.intValue() == 0) {
+            throw new IllegalArgumentException("uid cannot be null or zero !!");
+        }
+    }
+
+    /**
+     * This methods checks if the uid is non null and non zero, if not then
+     * throw the IllegalArgumentException immediately.
+     *
+     * @param userProfileDTO the user profile dto
+     */
+	private void validateInputs(UserProfileDTO userProfileDTO) {
+		if (userProfileDTO.getUid() == null
+				|| userProfileDTO.getUid().intValue() == 0) {
+			throw new IllegalArgumentException("Uid cannot be null, or Zero!!");
+		}
+	}
+
+    /**
+     * Add address details to the LDAPAttributeSet.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param attributeSet
+     *            the attribute set
+     */
+	private void handleAddress(UserProfileDTO userProfileDTO,
+			LDAPAttributeSet attributeSet) {
+		String addressLine1 = userProfileDTO.getAddressLn1();
+		if (StringUtils.isNotBlank(addressLine1)) {
+			attributeSet.add(new LDAPAttribute(PersistenceConstants.ADDRESS_LN1
+					.getValue(), addressLine1));
+		}
+		String addressLine2 = userProfileDTO.getAddressLn2();
+		if (StringUtils.isNotBlank(addressLine2)) {
+			attributeSet.add(new LDAPAttribute(PersistenceConstants.ADDRESS_LN2
+					.getValue(), addressLine2));
+		}
+		String state = userProfileDTO.getState();
+		if (StringUtils.isNotBlank(state)) {
+			attributeSet.add(new LDAPAttribute(PersistenceConstants.STATE
+					.getValue(), state));
+		}
+		String city = userProfileDTO.getCity();
+		if (StringUtils.isNotBlank(city)) {
+			attributeSet.add(new LDAPAttribute(PersistenceConstants.CITY
+					.getValue(), city));
+		}
+		String zip = userProfileDTO.getZipCode();
+		if (StringUtils.isNotBlank(zip)) {
+			attributeSet.add(new LDAPAttribute(PersistenceConstants.ZIP
+					.getValue(), zip));
+		}
+	}
+
+    /**
+     * This method stores user attributes in LDAP attribute set.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param attributeSet
+     *            the attribute set
+     */
+	private void handleUserAttributes(UserProfileDTO userProfileDTO,
+			LDAPAttributeSet attributeSet) {
+		attributeSet.add(new LDAPAttribute(PersistenceConstants.OBJECT_CLASS
+				.getValue(), PersistenceConstants.USER.getValue()));
+		attributeSet.add(new LDAPAttribute(PersistenceConstants.FIRST_NAME
+				.getValue(), userProfileDTO.getFirstName()));
+		attributeSet.add(new LDAPAttribute(PersistenceConstants.LAST_NAME
+				.getValue(), userProfileDTO.getLastName()));
+		attributeSet
+				.add(new LDAPAttribute(PersistenceConstants.MAIL.getValue(),
+						userProfileDTO.getEmail()));
+		attributeSet.add(new LDAPAttribute(
+				PersistenceConstants.ACTIVATION_STATUS.getValue(),
+				PersistenceConstants.STRING_Y.getValue()));
+		// user name is stored in userPrincipalName.
+		attributeSet.add(new LDAPAttribute(
+				PersistenceConstants.USER_PRINCIPAL_NAME.getValue(),
+				userProfileDTO.getEmail()));
+		attributeSet.add(new LDAPAttribute(
+				PersistenceConstants.USER_ACCOUNT_CTRL.getValue(),
+				PersistenceConstants.USER_ACCOUNT_CTRL_VAL.getValue()));
+		if (null == userProfileDTO.getRegisteredIndicator()
+				|| userProfileDTO.getRegisteredIndicator().equalsIgnoreCase(
+						StringUtils.EMPTY)) {
+			attributeSet.add(new LDAPAttribute(
+					PersistenceConstants.REGISTERED_INDICATOR.getValue(),
+					PersistenceConstants.REGISTERED.getValue()));
+		} else {
+			attributeSet.add(new LDAPAttribute(
+					PersistenceConstants.REGISTERED_INDICATOR.getValue(),
+					userProfileDTO.getRegisteredIndicator()));
+		}
+		if (null == userProfileDTO.getEndTargetUrl()
+				|| userProfileDTO.getEndTargetUrl().equalsIgnoreCase(
+						StringUtils.EMPTY)) {
+			attributeSet.add(new LDAPAttribute(
+					PersistenceConstants.END_TARGET_URL.getValue(), "BLANK"));
+		} else {
+			attributeSet.add(new LDAPAttribute(
+					PersistenceConstants.END_TARGET_URL.getValue(),
+					userProfileDTO.getEndTargetUrl()));
+		}
+		attributeSet.add(new LDAPAttribute(PersistenceConstants.UID_NUMBER
+				.getValue(), userProfileDTO.getUid().toString()));
+	}
+
+	/**
+	 * This method handles the scenarios where user roles and crdNumber are
+	 * supplied in combinations.
+	 * 
+	 * @param userProfileDTO
+	 *            the user profile dto
+	 * @param attributeSet
+	 *            the attribute set
+	 */
+	private void handleRolesAndCRDNumber(UserProfileDTO userProfileDTO,
+			LDAPAttributeSet attributeSet) {
+		String[] roles = userProfileDTO.getRoles();
+		String preferredRole = userProfileDTO.getPreferredRole();
+		String crdNumber = userProfileDTO.getIndividualCRD();
+		String city = userProfileDTO.getBranchIdOrCity();
+		String company = userProfileDTO.getCompanyName();
+		// if FA or Institutional Investors.
+		if (roles.length == 1) {
+			// handle FA
+			if (PersistenceConstants.FINANCIAL_ADVISORS.getValue().equals(
+					roles[0])
+					&& !PersistenceConstants.SALES_ASSISTANT.getValue().equals(
+							preferredRole)) {
+				// if crdNumber is unavailable then set branch or city.
+				this.handleCRD(attributeSet, crdNumber, city, company);
+			} else if (PersistenceConstants.FINANCIAL_ADVISORS.getValue()
+					.equals(roles[0])
+					&& PersistenceConstants.SALES_ASSISTANT.getValue().equals(
+							preferredRole)) {
+				// if crdNumber is unavailable then set branch or city.
+				//this.handleSalesAssistant(attributeSet, crdNumber, city, company);
+				attributeSet.add(new LDAPAttribute(PersistenceConstants.COMPANY
+						.getValue(), company));
+			} else if (PersistenceConstants.INSTITUTIONAL_INVESTORS.getValue()
+					.equals(roles[0])) {
+				attributeSet.add(new LDAPAttribute(PersistenceConstants.COMPANY
+						.getValue(), company));
+			}
+		} else if (roles.length == 2
+				&& !PersistenceConstants.SALES_ASSISTANT.getValue().equals(
+						preferredRole)) {
+			this.handleCRD(attributeSet, crdNumber, city, company);
+		} else if (roles.length == 2
+				&& PersistenceConstants.SALES_ASSISTANT.getValue().equals(
+						preferredRole)) {
+			if (StringUtils.isBlank(crdNumber)) {
+				attributeSet.add(new LDAPAttribute(PersistenceConstants.COMPANY
+						.getValue(), company));
+			} else {
+				attributeSet.add(new LDAPAttribute(
+						PersistenceConstants.INDIVIDUAL_CRD.getValue(),
+						crdNumber));
+			}
+		}
+	}
+
+	/**
+	 * Method handles the scenarios when CRD Number is not provided from UI.
+	 *
+	 * @param attributeSet the attribute set
+	 * @param crdNumber the crd number
+	 * @param city the city
+	 * @param company the company
+	 */
+	private void handleCRD(LDAPAttributeSet attributeSet, String crdNumber,
+			String city, String company) {
+		if (StringUtils.isBlank(crdNumber)) {
+			this.handleCityAndCompany(attributeSet, city, company);
+		} else {
+			attributeSet.add(new LDAPAttribute(
+					PersistenceConstants.INDIVIDUAL_CRD.getValue(), crdNumber));
+			if (StringUtils.isNotEmpty(company)) {
+				attributeSet.add(new LDAPAttribute(PersistenceConstants.COMPANY
+						.getValue(), company));
+			}
+			if (StringUtils.isNotEmpty(city)) {
+				attributeSet.add(new LDAPAttribute(
+					PersistenceConstants.BRANCH_ID_OR_CITY.getValue(), city));
+			}
+		}
+	}
+
+	/**
+	 * Method handles sets the branchId and city fields to LDAPAttributeSet.
+	 *
+	 * @param attributeSet the attribute set
+	 * @param city the city
+	 * @param company the company
+	 */
+	private void handleCityAndCompany(LDAPAttributeSet attributeSet,
+			String city, String company) {
+		attributeSet.add(new LDAPAttribute(
+				PersistenceConstants.BRANCH_ID_OR_CITY.getValue(), city));
+		attributeSet.add(new LDAPAttribute(PersistenceConstants.COMPANY
+				.getValue(), company));
+	}
+
+    /**
+     * This method handles the scenarios where HIFP user roles and crdNumber are
+     * supplied in combinations.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param attributeSet
+     *            the attribute set
+     */
+	private void handleHIFPRolesAndCRDNumber(UserProfileDTO userProfileDTO,
+			LDAPAttributeSet attributeSet) {
+		this.handleRolesAndCRDNumber(userProfileDTO, attributeSet);
+		this.handleAddress(userProfileDTO, attributeSet);
+	}
+
+    /**
+     * Handle password hint.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @return the lDAP attribute
+     */
+	private LDAPAttribute handlePasswordHint(UserProfileDTO userProfileDTO) {
+		LDAPAttribute attributePwdHint = null;
+		String passwordHint = userProfileDTO.getPasswordHint();
+		if (StringUtils.isNotBlank(passwordHint)) {
+			attributePwdHint = new LDAPAttribute(
+					PersistenceConstants.PASSWORD_HINT.getValue(), passwordHint);
+		}
+		return attributePwdHint;
+	}
+
+    /**
+     * This method makes the password string as UTF-16 Little Endian.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @return LDAPAttribute
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+	private LDAPAttribute handlePassword(UserProfileDTO userProfileDTO)
+			throws LDAPServerException {
+		try {
+			StringBuilder quotedPassword = new StringBuilder();
+			quotedPassword.append(PersistenceConstants.QUOTE.getValue())
+					.append(userProfileDTO.getPassword())
+					.append(PersistenceConstants.QUOTE.getValue());
+			// AD uses UTF16-LE for unicodePwd.
+			byte[] pwdLittleEndian = quotedPassword.toString().getBytes(
+					PersistenceConstants.UTF16_LE.getValue());
+			LDAPAttribute attributePwd = new LDAPAttribute(
+					PersistenceConstants.UNICODE_PASSWORD.getValue(),
+					pwdLittleEndian);
+			return attributePwd;
+		} catch (UnsupportedEncodingException e) {
+			LoggerUtil.errorLog(LDAPServiceImpl.class,
+					"UnsupportedEncodingException :: handlePassword {}",
+					e.fillInStackTrace());
+			throw new LDAPServerException("Encoding not spported ::", e);
+		}
+	}
+
+    /**
+     * This method process the password string in UTF16 Little Endian format.
+     * Also, set the password hint if supplied from UI.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param attributeSet
+     *            the attribute set
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+	private void handlePassword(UserProfileDTO userProfileDTO,
+			LDAPAttributeSet attributeSet) throws LDAPServerException {
+		attributeSet.add(this.handlePassword(userProfileDTO));
+		LDAPAttribute passwordHintAttr = this
+				.handlePasswordHint(userProfileDTO);
+		if (passwordHintAttr != null) {
+			attributeSet.add(passwordHintAttr);
+		}
+	}
+
+    /**
+     * This method prepares the comma separated user roles to be stored in LDAP.
+     * Also, the preferred role is set to the attribute set if provided.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param attributeSet
+     *            the attribute set
+     */
+	private void handleRoles(UserProfileDTO userProfileDTO,
+			LDAPAttributeSet attributeSet) {
+		String[] roles = userProfileDTO.getRoles();
+		String preferredRole = userProfileDTO.getPreferredRole();
+		if (roles.length > 1) {
+			StringBuilder builder = new StringBuilder();
+			for (int i = 0; i < roles.length; i++) {
+				builder.append(roles[i]);
+				if (i != roles.length - 1) {
+					// append comma and space till the last element.
+					builder.append(
+							PersistenceConstants.PATTERN_COMMA.getValue())
+							.append(PersistenceConstants.PATTERN_SPACE
+									.getValue());
+				}
+			}
+			attributeSet.add(new LDAPAttribute(PersistenceConstants.ROLE
+					.getValue(), builder.toString()));
+		} else {
+			attributeSet.add(new LDAPAttribute(PersistenceConstants.ROLE
+					.getValue(), roles[0]));
+		}
+		// Handle preferred role.
+		if (StringUtils.isNotBlank(preferredRole)) {
+			attributeSet.add(new LDAPAttribute(
+					PersistenceConstants.PREFERRED_ROLE.getValue(),
+					preferredRole));
+		}
+	}
+
+    /**
+     * This method add the user to LDAP as a relative distinguished name.
+     * 
+     * @param userContainer
+     *            the user container
+     * @param connection
+     *            the connection
+     * @param attributeSet
+     *            the attribute set
+     * @return userRDN
+     * @throws LDAPException
+     *             the lDAP exception
+     */
+    private void addUser(String userContainer, LDAPConnection connection,
+            LDAPAttributeSet attributeSet) throws LDAPException {
+        LDAPEntry newEntry = new LDAPEntry(userContainer, attributeSet);
+        // Insert record in LDAP.
+        connection.add(newEntry);
+    }
+
+    /**
+     * This method assign the newly created user to the group/s specified by
+     * user roles.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param connection
+     *            the connection
+     * @param attributeSet
+     *            the attribute set
+     * @param userContainer
+     *            the user container
+     * @throws LDAPException
+     *             the lDAP exception
+     */
+	private void addUserToGroup(UserProfileDTO userProfileDTO,
+			LDAPConnection connection, LDAPAttributeSet attributeSet,
+			String userContainer) throws LDAPException {
+		// Add user to group/s.
+		String[] roles = userProfileDTO.getRoles();
+		LDAPAttribute memberAttr = new LDAPAttribute(
+				PersistenceConstants.MEMBER.getValue(), userContainer);
+		for (int i = 0; i < roles.length; i++) {
+			String groupContainer = String.format(this.groupDistinguishedName,
+					roles[i]);
+			attributeSet.add(this.getLDAPAttribute(groupContainer));
+			connection.modify(groupContainer,
+					this.getLDAPModificationAdd(memberAttr));
+		}
+	}
+
+    /**
+     * This method fetches user attributes from LDAP for a given user id.
+     * 
+     * @param uid
+     *            the uid
+     * @param connection
+     *            the connection
+     * @return LDAPAttributeSet
+     * @throws LDAPException
+     *             the lDAP exception
+     */
+	private LDAPAttributeSet getUserAttributes(String uid,
+			LDAPConnection connection) throws LDAPException {
+		// Attributes to be fetched from LDAP.
+		String[] attributes = { PersistenceConstants.FIRST_NAME.getValue(),
+				PersistenceConstants.LAST_NAME.getValue(),
+				PersistenceConstants.MAIL.getValue(),
+				PersistenceConstants.ROLE.getValue(),
+				PersistenceConstants.PREFERRED_ROLE.getValue(),
+				PersistenceConstants.COMPANY.getValue(),
+				PersistenceConstants.BRANCH_ID_OR_CITY.getValue(),
+				PersistenceConstants.USER_PRINCIPAL_NAME.getValue(),
+				PersistenceConstants.UID_NUMBER.getValue(),
+				PersistenceConstants.ADDRESS_LN1.getValue(),
+				PersistenceConstants.ADDRESS_LN2.getValue(),
+				PersistenceConstants.CITY.getValue(),
+				PersistenceConstants.STATE.getValue(),
+				PersistenceConstants.ZIP.getValue(),
+				PersistenceConstants.PASSWORD_HINT.getValue(),
+
+				PersistenceConstants.REGISTERED_INDICATOR.getValue(),
+				PersistenceConstants.END_TARGET_URL.getValue(),
+
+				PersistenceConstants.OBJECT_GUID.getValue(),
+				PersistenceConstants.INDIVIDUAL_CRD.getValue(), };
+		// Fetch the attributes
+		LDAPEntry entry = connection.read(
+				String.format(this.userDistinguishedName, uid), attributes);
+		return entry.getAttributeSet();
+	}
+
+    /**
+     * This method creates an LDAP ConnectionPool.
+     * 
+     * @return {@link ConnectionPool}
+     * @throws LDAPServerException
+     *             the lDAP server exception
+     */
+	private ConnectionPool initConnectionPool() throws LDAPServerException {
+		LoggerUtil.infoLog(LDAPServiceImpl.class, "Start initConnectionPool :");
+		// Create an LDAP Connection Pool.
+		ConnectionPool connectionPool = null;
+		try {
+			int minSize = Integer.parseInt(this.minPoolSize);
+			int maxSize = Integer.parseInt(this.maxPoolSize);
+			int port = Integer.parseInt(this.ldapPort);
+			int version = Integer.parseInt(PersistenceConstants.LDAP_VER
+					.getValue());
+			// passing LDAPSSLSocketFactory for SSL capabilities.
+			connectionPool = new ConnectionPool(minSize, maxSize, version,
+					this.ldapHost, port, this.ldapLoginDN, this.ldapPassword,
+					this.sslSocketFactory);
+		} catch (LDAPException lex) {
+			this.logLDAPException(lex);
+			throw new LDAPServerException(
+					PersistenceConstants.LDAP_CONNECTION_ERROR.getValue(), lex);
+		} catch (Exception e) {
+			LoggerUtil.errorLog(LDAPServiceImpl.class,
+					PersistenceConstants.LDAP_CONNECTION_ERROR_ARG.getValue(),
+					e.fillInStackTrace());
+			throw new LDAPServerException(
+					PersistenceConstants.LDAP_CONNECTION_ERROR.getValue(), e);
+		}
+		LoggerUtil.infoLog(LDAPServiceImpl.class,
+				"ConnectionPool created : {}", connectionPool);
+		return connectionPool;
+	}
+
+    /**
+     * This method updates the user attributes in LDAP.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param modificationSet
+     *            the modification set
+     * @return boolean flag indicating that email field changed.
+     */
+	private boolean updateUserAttributes(UserProfileDTO userProfileDTO,
+			LDAPModificationSet modificationSet) {
+		LDAPAttribute firstName = new LDAPAttribute(
+				PersistenceConstants.FIRST_NAME.getValue(),
+				userProfileDTO.getFirstName());
+		LDAPAttribute lastName = new LDAPAttribute(
+				PersistenceConstants.LAST_NAME.getValue(),
+				userProfileDTO.getLastName());
+		boolean isEmailChanged = false;
+		// in case email is changed from front end.
+		String currentEmail = userProfileDTO.getCurrentEmail();
+		if (StringUtils.isNotBlank(currentEmail)) {
+			LDAPAttribute currentEmailAttr = new LDAPAttribute(
+					PersistenceConstants.MAIL.getValue(), currentEmail);
+			modificationSet.add(LDAPModification.REPLACE, currentEmailAttr);
+			// update the userPrincipalName as well.
+			LDAPAttribute userNameAttr = new LDAPAttribute(
+					PersistenceConstants.USER_PRINCIPAL_NAME.getValue(),
+					currentEmail);
+			modificationSet.add(LDAPModification.REPLACE, userNameAttr);
+			isEmailChanged = true;
+		}
+		LDAPAttribute company = new LDAPAttribute(
+				PersistenceConstants.COMPANY.getValue(),
+				userProfileDTO.getCompanyName());
+		LDAPAttribute branchIdOrCity = new LDAPAttribute(
+				PersistenceConstants.BRANCH_ID_OR_CITY.getValue(),
+				userProfileDTO.getBranchIdOrCity());
+		LDAPAttribute addressLn1 = new LDAPAttribute(
+				PersistenceConstants.ADDRESS_LN1.getValue(),
+				userProfileDTO.getAddressLn1());
+		LDAPAttribute addressLn2 = new LDAPAttribute(
+				PersistenceConstants.ADDRESS_LN2.getValue(),
+				userProfileDTO.getAddressLn2());
+		LDAPAttribute state = new LDAPAttribute(
+				PersistenceConstants.STATE.getValue(),
+				userProfileDTO.getState());
+		LDAPAttribute city = new LDAPAttribute(
+				PersistenceConstants.CITY.getValue(), userProfileDTO.getCity());
+		LDAPAttribute zipCode = new LDAPAttribute(
+				PersistenceConstants.ZIP.getValue(),
+				userProfileDTO.getZipCode());
+
+		LDAPAttribute registeredIndicator = new LDAPAttribute(
+				PersistenceConstants.REGISTERED_INDICATOR.getValue(),
+				userProfileDTO.getRegisteredIndicator());
+
+		modificationSet.add(LDAPModification.REPLACE, firstName);
+		modificationSet.add(LDAPModification.REPLACE, lastName);
+		modificationSet.add(LDAPModification.REPLACE, company);
+		modificationSet.add(LDAPModification.REPLACE, branchIdOrCity);
+		modificationSet.add(LDAPModification.REPLACE, addressLn1);
+		modificationSet.add(LDAPModification.REPLACE, addressLn2);
+		modificationSet.add(LDAPModification.REPLACE, state);
+		modificationSet.add(LDAPModification.REPLACE, city);
+		modificationSet.add(LDAPModification.REPLACE, zipCode);
+
+		modificationSet.add(LDAPModification.REPLACE, registeredIndicator);
+
+		return isEmailChanged;
+	}
+
+    
+    /**
+     * This method updates the user attributes in LDAP.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param modificationSet
+     *            the modification set
+     * @return boolean flag indicating that email field changed.
+     */
+	private boolean updateUserAttributesPreRegistration(
+			UserProfileDTO userProfileDTO, LDAPModificationSet modificationSet) {
+		LDAPAttribute firstName = new LDAPAttribute(
+				PersistenceConstants.FIRST_NAME.getValue(),
+				userProfileDTO.getFirstName());
+		LDAPAttribute lastName = new LDAPAttribute(
+				PersistenceConstants.LAST_NAME.getValue(),
+				userProfileDTO.getLastName());
+		boolean isEmailChanged = false;
+		// in case email is changed from front end.
+		String currentEmail = userProfileDTO.getCurrentEmail();
+		if (StringUtils.isNotBlank(currentEmail)) {
+			LDAPAttribute currentEmailAttr = new LDAPAttribute(
+					PersistenceConstants.MAIL.getValue(), currentEmail);
+			modificationSet.add(LDAPModification.REPLACE, currentEmailAttr);
+			// update the userPrincipalName as well.
+			LDAPAttribute userNameAttr = new LDAPAttribute(
+					PersistenceConstants.USER_PRINCIPAL_NAME.getValue(),
+					currentEmail);
+			modificationSet.add(LDAPModification.REPLACE, userNameAttr);
+			isEmailChanged = true;
+		}
+		LDAPAttribute company = new LDAPAttribute(
+				PersistenceConstants.COMPANY.getValue(),
+				userProfileDTO.getCompanyName());
+		LDAPAttribute registeredIndicator = new LDAPAttribute(
+				PersistenceConstants.REGISTERED_INDICATOR.getValue(),
+				userProfileDTO.getRegisteredIndicator());
+
+		modificationSet.add(LDAPModification.REPLACE, firstName);
+		modificationSet.add(LDAPModification.REPLACE, lastName);
+		modificationSet.add(LDAPModification.REPLACE, company);
+		modificationSet.add(LDAPModification.REPLACE, registeredIndicator);
+
+		return isEmailChanged;
+	}
+    /**
+     * Handles roles in case of update profile.
+     * 
+     * @param roles
+     *            the roles
+     * @param modificationSet
+     *            the modification set
+     */
+	private void handleRoles(String[] roles, LDAPModificationSet modificationSet) {
+		StringBuilder builder = new StringBuilder();
+		for (int i = 0; i < roles.length; i++) {
+			builder.append(roles[i]);
+			if (i != roles.length - 1) {
+				builder.append(PersistenceConstants.PATTERN_COMMA.getValue())
+						.append(PersistenceConstants.PATTERN_SPACE.getValue());
+			}
+		}
+		LDAPAttribute role = new LDAPAttribute(
+				PersistenceConstants.ROLE.getValue(), builder.toString());
+		modificationSet.add(LDAPModification.REPLACE, role);
+	}
+
+    /**
+     * This method handles the group membership in case of updated roles.
+     * 
+     * @param connection
+     *            the connection
+     * @param userDN
+     *            the user dn
+     * @param roles
+     *            the roles
+     * @param ldapRoles
+     *            the ldap roles
+     * @throws LDAPException
+     *             the lDAP exception
+     */
+    private void handleGroupMembership(LDAPConnection connection,
+            String userDN, String[] roles, String[] ldapRoles)
+            throws LDAPException {
+        LDAPAttribute memberAttr = new LDAPAttribute(
+                PersistenceConstants.MEMBER.getValue(), userDN);
+        // Delete existing group membership.
+        for (int i = 0; i < ldapRoles.length; i++) {
+            String groupContainer = String.format(this.groupDistinguishedName,
+                    ldapRoles[i]);
+            connection.modify(groupContainer,
+                    this.getLDAPModificationDelete(memberAttr));
+        }
+        // Assign new role membership.
+        for (int i = 0; i < roles.length; i++) {
+            String groupContainer = String.format(this.groupDistinguishedName,
+                    roles[i]);
+            connection.modify(groupContainer,
+                    this.getLDAPModificationAdd(memberAttr));
+        }
+    }
+
+    /**
+     * This method handles the roles retrieved from LDAP.
+     * 
+     * @param userProfileDTO
+     *            the user profile dto
+     * @param modificationSet
+     *            the modification set
+     * @param entry
+     *            the entry
+     * @return the string[]
+     */
+    private String[] handleLDAPRoles(UserProfileDTO userProfileDTO,
+            LDAPModificationSet modificationSet, LDAPEntry entry) {
+        // Fetch Role attribute from LDAP - comma separated values.
+        LDAPAttribute roleAttr = entry.getAttribute(PersistenceConstants.ROLE
+                .getValue());
+        LDAPAttribute prefRoleAttr = entry
+                .getAttribute(PersistenceConstants.PREFERRED_ROLE.getValue());
+        String ldapRole = roleAttr.getStringValues().nextElement().toString();
+        String[] ldapRoles = ldapRole.split(PersistenceConstants.PATTERN_COMMA
+                .getValue());
+        String prefRole = userProfileDTO.getPreferredRole();
+        if (StringUtils.isNotBlank(prefRole)) {
+            // if LDAP is having preferred role.
+            if (prefRoleAttr != null) { // REPLACE
+                LDAPAttribute preferredRole = new LDAPAttribute(
+                        PersistenceConstants.PREFERRED_ROLE.getValue(),
+                        prefRole);
+                modificationSet.add(LDAPModification.REPLACE, preferredRole);
+            } else { // if not - ADD
+                LDAPAttribute preferredRole = new LDAPAttribute(
+                        PersistenceConstants.PREFERRED_ROLE.getValue(),
+                        prefRole);
+                modificationSet.add(LDAPModification.ADD, preferredRole);
+            }
+        }
+        return ldapRoles;
+    }
+
+    /**
+     * This method populates the user profile DTO with the personal info fetched
+     * from LDAP.
+     * 
+     * @param attributeSet
+     *            the attribute set
+     * @param profileDTO
+     *            the profile dto
+     * @return the personal info
+     */
+    private void getPersonalInfo(LDAPAttributeSet attributeSet,
+            UserProfileDTO profileDTO) {
+        String firstName = (String) attributeSet
+                .getAttribute(PersistenceConstants.FIRST_NAME.getValue())
+                .getStringValues().nextElement();
+        profileDTO.setFirstName(firstName);
+        String lastName = (String) attributeSet
+                .getAttribute(PersistenceConstants.LAST_NAME.getValue())
+                .getStringValues().nextElement();
+        profileDTO.setLastName(lastName);
+        String email = (String) attributeSet
+                .getAttribute(PersistenceConstants.MAIL.getValue())
+                .getStringValues().nextElement();
+        profileDTO.setEmail(email);
+        
+        
+        if(null != attributeSet
+                .getAttribute(PersistenceConstants.REGISTERED_INDICATOR.getValue())) {
+        	String registeredIndicator = (String) attributeSet
+                    .getAttribute(PersistenceConstants.REGISTERED_INDICATOR.getValue())
+                    .getStringValues().nextElement();
+            profileDTO.setRegisteredIndicator(registeredIndicator);
+        }
+        if(null != attributeSet
+                .getAttribute(PersistenceConstants.END_TARGET_URL.getValue())) {
+        	 String endTargetUrl = (String) attributeSet
+                     .getAttribute(PersistenceConstants.END_TARGET_URL.getValue())
+                     .getStringValues().nextElement();
+             
+             profileDTO.setEndTargetUrl(endTargetUrl);
+        	
+        }
+       
+        
+        
+    }
+
+    /**
+     * This method populates the user profile DTO with the official info fetched
+     * from LDAP.
+     * 
+     * @param attributeSet
+     *            the attribute set
+     * @param profileDTO
+     *            the profile dto
+     * @return the official info
+     */
+	private void getOfficialInfo(LDAPAttributeSet attributeSet,
+			UserProfileDTO profileDTO) {
+		String company = null;
+		if (attributeSet.getAttribute(PersistenceConstants.COMPANY.getValue()) != null) {
+			company = (String) attributeSet
+					.getAttribute(PersistenceConstants.COMPANY.getValue())
+					.getStringValues().nextElement();
+			profileDTO.setCompanyName(company);
+		}
+		String branch = null;
+		if (attributeSet.getAttribute(PersistenceConstants.BRANCH_ID_OR_CITY
+				.getValue()) != null) {
+			branch = (String) attributeSet
+					.getAttribute(
+							PersistenceConstants.BRANCH_ID_OR_CITY.getValue())
+					.getStringValues().nextElement();
+			profileDTO.setBranchIdOrCity(branch);
+		}
+		String crdNo = null;
+		if (attributeSet.getAttribute(PersistenceConstants.INDIVIDUAL_CRD
+				.getValue()) != null) {
+			crdNo = (String) attributeSet
+					.getAttribute(
+							PersistenceConstants.INDIVIDUAL_CRD.getValue())
+					.getStringValues().nextElement();
+			profileDTO.setIndividualCRD(crdNo);
+		}
+	}
+
+    /**
+     * This method populates the user profile DTO with the roles info fetched
+     * from LDAP.
+     * 
+     * @param attributeSet
+     *            the attribute set
+     * @param profileDTO
+     *            the profile dto
+     * @return the roles
+     */
+	private void getRoles(LDAPAttributeSet attributeSet,
+			UserProfileDTO profileDTO) {
+		String role = (String) attributeSet
+				.getAttribute(PersistenceConstants.ROLE.getValue())
+				.getStringValues().nextElement();
+		profileDTO.setRoles(role.split(PersistenceConstants.PATTERN_COMMA
+				.getValue()));
+		LDAPAttribute preferredRoleAttr = attributeSet
+				.getAttribute(PersistenceConstants.PREFERRED_ROLE.getValue());
+		String preferredRole = null;
+		if (preferredRoleAttr != null) {
+			preferredRole = (String) preferredRoleAttr.getStringValues()
+					.nextElement();
+			profileDTO.setPreferredRole(preferredRole);
+		}
+	}
+
+    /**
+     * This method populates the user profile DTO with the subject details
+     * fetched from LDAP.
+     * 
+     * @param attributeSet
+     *            the attribute set
+     * @param profileDTO
+     *            the profile dto
+     * @return the subject
+     */
+	private void getSubject(LDAPAttributeSet attributeSet,
+			UserProfileDTO profileDTO) {
+		String userNameLdap = (String) attributeSet
+				.getAttribute(
+						PersistenceConstants.USER_PRINCIPAL_NAME.getValue())
+				.getStringValues().nextElement();
+		profileDTO.setUserName(userNameLdap);
+		String uidNumber = (String) attributeSet
+				.getAttribute(PersistenceConstants.UID_NUMBER.getValue())
+				.getStringValues().nextElement();
+		profileDTO.setUid(Integer.parseInt(uidNumber));
+		LDAPAttribute guidAttr = attributeSet
+				.getAttribute(PersistenceConstants.OBJECT_GUID.getValue());
+		if (guidAttr != null) {
+			String objectGUID = (String) guidAttr.getStringValues()
+					.nextElement();
+			profileDTO.setObjectGUID(objectGUID);
+		}
+		LDAPAttribute pwdHintAttr = attributeSet
+				.getAttribute(PersistenceConstants.PASSWORD_HINT.getValue());
+		String passwordHint = null;
+		if (pwdHintAttr != null) {
+			passwordHint = (String) pwdHintAttr.getStringValues().nextElement();
+			profileDTO.setPasswordHint(passwordHint);
+		}
+	}
+
+    /**
+     * This method populates the user profile DTO with the address info fetched
+     * from LDAP.
+     * 
+     * @param attributeSet
+     *            the attribute set
+     * @param profileDTO
+     *            the profile dto
+     * @return the address details
+     */
+	private void getAddressDetails(LDAPAttributeSet attributeSet,
+			UserProfileDTO profileDTO) {
+		if (attributeSet.getAttribute(PersistenceConstants.ADDRESS_LN1
+				.getValue()) != null) {
+			String addressLn1 = (String) attributeSet
+					.getAttribute(PersistenceConstants.ADDRESS_LN1.getValue())
+					.getStringValues().nextElement();
+			profileDTO.setAddressLn1(addressLn1);
+		}
+		if (attributeSet.getAttribute(PersistenceConstants.ADDRESS_LN2
+				.getValue()) != null) {
+			String addressLn2 = (String) attributeSet
+					.getAttribute(PersistenceConstants.ADDRESS_LN2.getValue())
+					.getStringValues().nextElement();
+			profileDTO.setAddressLn2(addressLn2);
+		}
+		if (attributeSet.getAttribute(PersistenceConstants.STATE.getValue()) != null) {
+			String state = (String) attributeSet
+					.getAttribute(PersistenceConstants.STATE.getValue())
+					.getStringValues().nextElement();
+			profileDTO.setState(state);
+		}
+		if (attributeSet.getAttribute(PersistenceConstants.CITY.getValue()) != null) {
+			String city = (String) attributeSet
+					.getAttribute(PersistenceConstants.CITY.getValue())
+					.getStringValues().nextElement();
+			profileDTO.setCity(city);
+		}
+		if (attributeSet.getAttribute(PersistenceConstants.ZIP.getValue()) != null) {
+			String zip = (String) attributeSet
+					.getAttribute(PersistenceConstants.ZIP.getValue())
+					.getStringValues().nextElement();
+			profileDTO.setZipCode(zip);
+		}
+	}
+
+    /**
+     * This methods logs the LDAPException in detail.
+     * 
+     * @param ldapException
+     *            the ldap exception
+     */
+	private void logLDAPException(LDAPException ldapException) {
+		LoggerUtil.errorLog(LDAPServiceImpl.class,
+				"LDAPException: ErrorCode : {}",
+				ldapException.getLDAPResultCode());
+		LoggerUtil.errorLog(LDAPServiceImpl.class, "LDAPException: Cause : {}",
+				ldapException.errorCodeToString());
+		LoggerUtil.errorLog(LDAPServiceImpl.class,
+				"LDAPException: ErrorMessage : {}",
+				StringUtils.trimToEmpty(ldapException.getLDAPErrorMessage()));
+	}
+
+	/**
+	 * This method Initialize JMX MBean LDAPUserMBean.
+	 * 
+	 * @return the lDAP user m bean
+	 */
+	private LDAPUserMBean initLDAPUserMBean() {
+		// Initialize JMX MBean.
+		LDAPUserMBean ldapUserMBean = null;
+		try {
+			if (StringUtils.isBlank(this.mbeanObjectName)) {
+				this.mbeanObjectName = String.format(
+						PersistenceConstants.MBEAN_OBJECT_NAME.getValue(),
+						this.ldapHost, this.ldapPort);
+			}
+			MBeanServerConnection mbeanServer = ManagementFactory
+					.getPlatformMBeanServer();
+			ObjectName objectName = new ObjectName(this.mbeanObjectName);
+			ldapUserMBean = JMX.newMBeanProxy(mbeanServer, objectName,
+					LDAPUserMBean.class);
+			LoggerUtil.infoLog(LDAPServiceImpl.class,
+					"LDAPUserMBean initialized: {}", ldapUserMBean);
+			return ldapUserMBean;
+		} catch (MalformedObjectNameException monex) {
+			LoggerUtil.errorLog(LDAPServiceImpl.class,
+					"MalformedObjectNameException: {}", monex);
+		} catch (Exception ex) {
+			LoggerUtil.errorLog(LDAPServiceImpl.class,
+					"Exception while creating LDAPUserMBean: {}", ex);
+		}
+		return ldapUserMBean;
+	}
+    
+   
+    
+    /** deleting LDAP user based on UID value
+     * 
+     * @param String uid value of the LDAP user
+     * 
+     * @return boolean status of the user deletion
+     *  */
+    
+    @Override
+   public  boolean delete (String uid) throws LDAPServerException
+   {
+	   
+	   LDAPConnection connection = null;
+	   boolean isDeleted = false;
+	   
+	  if( isUserExists(uid))
+	  {
+		 
+		  try{
+			
+			  connection = this.connectionPool.getConnection();
+			  if (connection!=null && connection.isConnected()) {
+				  String userDN = String.format(this.userDistinguishedName, uid);
+				  
+				 connection.delete(userDN);
+				  isDeleted = true;
+				  
+			  }
+			  
+		  }
+		  catch(Exception e){
+			  isDeleted = false;
+		  }
+		  finally {
+	            this.closeConnection(connection);
+	        }
+	  }
+	  return isDeleted;
+   }
+ @Override
+    public HashMap<String, UserProfileDTO> getUsers(String baseDN,String fd,String td) throws Exception {
+    	 LDAPConnection connection = null;
+    	 LDAPSearchResults searchResults = null;
+    	 LDAPAttributeSet attributeSet = null;
+    	 String myBaseDN;
+    	 HashMap<String , UserProfileDTO> resultsMap = new HashMap<String , UserProfileDTO>();    	 
+    	 LDAPConnection conn = null;
+         try {
+       
+         
+             connection = this.connectionPool.getConnection();
+             connection.setOption(LDAPConnection.SIZELIMIT, 0);
+             if(baseDN==null)            
+            	 myBaseDN = "OU=publish,OU=people,DC=thf,DC=com";
+             else myBaseDN=baseDN;
+             
+             String myFilter="(&(&(|(objectCategory=Person)(objectClass=User))(whenCreated>="+td+")(whenCreated<="+fd+")))"; 
+             
+             
+             String[] myAttrs = null ; 
+           
+             if (connection!=null  ) {
+            	 connection.setOption(LDAPConnection.SIZELIMIT, 0);
+            	  searchResults = connection.search(myBaseDN, 1, myFilter,myAttrs,false);
+                 	if(searchResults!=null){
+     				
+     				while(searchResults.hasMoreElements())
+     				{
+
+     					LDAPEntry myEntry = searchResults.next();
+     					String _uid =null;
+     				
+     					if(myEntry!=null){
+     						attributeSet = myEntry.getAttributeSet();
+     						if(attributeSet!=null){
+     							try{
+     						_uid = (String) attributeSet
+     				                .getAttribute(PersistenceConstants.UID_NUMBER.getValue())
+     				                .getStringValues().nextElement();
+     							}catch(Exception ex){
+     								
+     								_uid=null;
+     							}
+     							}
+     						if(_uid!=null){
+     					
+     					 UserProfileDTO profileDTO = new UserProfileDTO();
+     		            // Get all the attributes.
+     		            this.getPersonalInfo(attributeSet, profileDTO);
+     		            // get roles and preferred role.
+     		            this.getRoles(attributeSet, profileDTO);
+     		            // get official info e.g company name.
+     		            this.getOfficialInfo(attributeSet, profileDTO);
+     		            // get subject details from LDAP.
+     		            this.getSubject(attributeSet, profileDTO);
+     		            // get address from LDAP.
+     		            this.getAddressDetails(attributeSet, profileDTO);
+     		            
+     		           resultsMap.put(_uid, profileDTO);
+     						}
+     						}
+     					}
+     				}
+     			}
+         			
+         }
+         catch(Exception e){
+        	 LoggerUtil.errorLog(LDAPServiceImpl.class,
+ 					"Exception while fetching LDAP users: {}", e);
+        	 
+        	 throw new Exception(e.toString());
+         }
+         finally {
+        	 
+        	 if(conn!=null)
+					connection.disconnect();
+        	 else
+             this.closeConnection(connection);
+         }
+         return resultsMap;
+            	 
+    
+    	 
+    }
+    
+ @Override
+ public HashMap<String, UserProfileDTO> getUsers(String baseDN,String customQuery) throws Exception {
+ 	 LDAPConnection connection = null;
+ 	 LDAPSearchResults searchResults = null;
+ 	 LDAPAttributeSet attributeSet = null;
+ 	 String myBaseDN;
+ 	 HashMap<String , UserProfileDTO> resultsMap = new HashMap<String , UserProfileDTO>();    	 
+ 	 LDAPConnection conn = null;
+      try {
+    
+      
+          connection = this.connectionPool.getConnection();
+          if(baseDN==null)            
+         	 myBaseDN = "OU=publish,OU=people,DC=thf,DC=com";
+          else myBaseDN=baseDN;
+          
+          //String myFilter="(&(&(|(objectCategory=Person)(objectClass=User))(whenCreated>="+td+")(whenCreated<="+fd+")))"; 
+          
+          
+          String[] myAttrs = null ; 
+        
+          if (connection!=null  ) {
+         	  searchResults = connection.search(myBaseDN, 1, customQuery,myAttrs,false);
+              	if(searchResults!=null){
+  				
+  				while(searchResults.hasMoreElements())
+  				{
+
+  					LDAPEntry myEntry = searchResults.next();
+  					String _uid =null;
+  				
+  					if(myEntry!=null){
+  						attributeSet = myEntry.getAttributeSet();
+  						if(attributeSet!=null){
+  							try{
+  						_uid = (String) attributeSet
+  				                .getAttribute(PersistenceConstants.UID_NUMBER.getValue())
+  				                .getStringValues().nextElement();
+  							}catch(Exception ex){
+  								
+  								_uid=null;
+  							}
+  							}
+  						if(_uid!=null){
+  					
+  					 UserProfileDTO profileDTO = new UserProfileDTO();
+  		            // Get all the attributes.
+  		            this.getPersonalInfo(attributeSet, profileDTO);
+  		            // get roles and preferred role.
+  		            this.getRoles(attributeSet, profileDTO);
+  		            // get official info e.g company name.
+  		            this.getOfficialInfo(attributeSet, profileDTO);
+  		            // get subject details from LDAP.
+  		            this.getSubject(attributeSet, profileDTO);
+  		            // get address from LDAP.
+  		            this.getAddressDetails(attributeSet, profileDTO);
+  		            
+  		           resultsMap.put(_uid, profileDTO);
+  						}
+  						}
+  					}
+  				}
+  			}
+      			
+      }
+      catch(Exception e){
+     	 LoggerUtil.errorLog(LDAPServiceImpl.class,
+					"Exception while fetching LDAP users: {}", e);
+     	 
+     	 throw new Exception(e.toString());
+      }
+      finally {
+     	 
+     	 if(conn!=null)
+					connection.disconnect();
+     	 else
+          this.closeConnection(connection);
+      }
+      return resultsMap;
+         	 
+ }
+
+	public String unLock(String email) {
+
+		LDAPConnection connection = null;
+		String isUnlocked = null;
+		
+          LoggerUtil.infoLog(this.getClass(),"Inside Unlock method");
+			try {
+				connection = this.connectionPool.getConnection();
+				if (connection != null) {
+                    LoggerUtil.infoLog(this.getClass(),"Connection successful");
+					String userDN = String.format(this.userDistinguishedName,
+							email);
+                    LoggerUtil.infoLog(this.getClass(),userDN);
+					LDAPAttribute unlockAttribute = new LDAPAttribute(
+		                    PersistenceConstants.USER_ACCOUNT_LOCKED_PROPERTY.getValue(),
+		                    PersistenceConstants.USER_ACCOUNT_UNLOCK_VAL.getValue());
+						
+						LDAPModificationSet modificationSet = new LDAPModificationSet();
+						modificationSet.add(LDAPModification.REPLACE, unlockAttribute);
+						
+						
+						connection.modify(userDN, modificationSet);
+						
+						isUnlocked = "success";
+                        LoggerUtil.infoLog(this.getClass(),"User DN"+userDN + "Unlock status"+isUnlocked);
+					}
+				
+				else 
+				{
+					isUnlocked = "failure";
+				}
+					
+					
+					
+				
+			} catch (Exception e) {
+				 LoggerUtil.infoLog(LDAPServiceImpl.class,
+							"Connected: {}", connection);
+			} finally {
+				this.closeConnection(connection);
+			}
+		
+		return isUnlocked;
+	}
+	
+    @Override
+	public ArrayList<UserProfileDTO> findByName(String firstName,String lastName, String email){
+		
+		LDAPConnection connection = null;
+   	    LDAPSearchResults searchResults = null;
+   	    LDAPAttributeSet attributeSet = null;
+   	    String myBaseDN;
+   	    String myFilter=null;
+   	    String firstname = null;
+		String lastname = null;
+		String Email=null;
+		
+		    
+		ArrayList<UserProfileDTO>  al = new ArrayList<UserProfileDTO>();
+	
+		
+	
+		try {
+			connection = this.connectionPool.getConnection();
+			
+				myBaseDN = "OU=publish,OU=people,DC=thf,DC=com";
+				
+			
+				 if( !firstName.equals("") && !lastName.equals("")){
+				 myFilter="(&(&(&(|(objectCategory=Person)(objectClass=User))(firstName="+firstName+"))(lastName="+lastName+"))(lockoutTime>=1))"; 
+				 }
+				 
+				 	 
+				 else{
+					 
+					 myFilter="(&(&(|(objectCategory=Person)(objectClass=User))(userPrincipalName="+email+"))(lockoutTime>=1))";  
+				 }
+	              String[] myAttrs = null ; 
+	           
+	             if (connection!=null  ) {
+	            	 
+	            	 LoggerUtil.infoLog(LDAPServiceImpl.class,
+								"Connected: {}", connection);
+	            	  searchResults = connection.search(myBaseDN, 1, myFilter,myAttrs,false);
+	                 	if(searchResults!=null){
+	                 		
+	                 		while(searchResults.hasMoreElements()){
+
+	         					LDAPEntry myEntry = searchResults.next();
+	         					
+	         					if(myEntry!=null){
+	         						attributeSet = myEntry.getAttributeSet();
+	         						if(attributeSet!=null){
+	         							UserProfileDTO profileDTO = new UserProfileDTO(); 
+	         							LoggerUtil.infoLog(LDAPServiceImpl.class,
+ 	     										"attribute set returned: {}", attributeSet);
+	         						
+	         							try{
+	         	     						firstname = (String) attributeSet.getAttribute(PersistenceConstants.FIRST_NAME.getValue()).getStringValues().nextElement();
+	         	     						lastname  = (String) attributeSet.getAttribute(PersistenceConstants.LAST_NAME.getValue()).getStringValues().nextElement();
+	         	     				        Email     = (String) attributeSet.getAttribute(PersistenceConstants.MAIL.getValue()).getStringValues().nextElement();
+	         	     				       
+	         	     				     
+	         	     							}catch(Exception ex){
+	         	     								
+	         	     								LoggerUtil.infoLog(LDAPServiceImpl.class,
+	         	     										"attribute set returned null: {}", attributeSet);
+	         	     							}
+	         							
+	         							
+	         							
+	         							profileDTO.setFirstName(firstname);
+	         							profileDTO.setLastName(lastname);
+	         							profileDTO.setEmail(Email);
+	         							
+	         							
+	         							al.add(profileDTO);
+	         							
+	         						}
+	         					
+	         					
+	         				}
+	       
+				
+			          }
+		
+	    }
+	 
+	}
+	  
+    }catch(Exception e){
+		 
+	  LoggerUtil.infoLog(LDAPConnection.class,
+						"Could not get conncetion {}", connection);
+	  }
+		
+		finally {
+				this.closeConnection(connection);
+			}
+		
+		return al;
+}
+	
+}	
+ 
+
+----------------------------------------------------------------------------
+public enum PersistenceConstants {
+    /**
+     * Constant for SHA algo.
+     */
+    SHA_256("SHA-256"),
+    /**
+     * Constant for lastLogon attribute.
+     */
+    LAST_LOGON("lastLogon"),
+    /**
+     * Constant for badPwdCount attribute.
+     */
+    BAD_PWD_COUNT("badPwdCount"),
+    /**
+     * Constant for LDAP attribute member.
+     */
+    MEMBER("member"),
+    /**
+     * Constant for LDAP attribute memberOf.
+     */
+    MEMBER_OF("memberOf"),
+    /**
+     * Constant for LDAP attribute ou.
+     */
+    OU_GROUP(",ou=group,"),
+    /**
+     * Constant for LDAP attribute cn.
+     */
+    CN("cn="),
+    /**
+     * Constant for LDAP attribute people.
+     */
+    OU_PEOPLE(",ou=people,"),
+    /**
+     * Constant for LDAP attribute uidNumber.
+     */
+    UID_NUMBER("uidNumber"),
+    /**
+     * Constant for LDAP attribute company.
+     */
+    COMPANY("company"),
+    /**
+     * Constant for LDAP attribute branchIdOrcity.
+     */
+    BRANCH_ID_OR_CITY("branchIdOrCity"),
+    /**
+     * Constant for LDAP attribute individualCRD.
+     */
+    INDIVIDUAL_CRD("individualCRD"),
+    /**
+     * Constant for LDAP attribute passwordHint.
+     */
+    PASSWORD_HINT("passwordHint"),
+    /**
+     * Constant for LDAP attribute userPassword.
+     */
+    USER_PASSWORD("userPassword"),
+    /**
+     * Constant for LDAP attribute unicodePwd.
+     */
+    UNICODE_PASSWORD("unicodePwd"),
+    /**
+     * QUOTE.
+     */
+    QUOTE("\""),
+    /**
+     * Constant for LDAP attribute userAccountControl.
+     */
+    USER_ACCOUNT_CTRL("userAccountControl"),
+    /**
+     * Constant for LDAP attribute lockoutTime .
+     */
+    USER_ACCOUNT_LOCKED_PROPERTY("lockoutTime"),
+    
+    /**
+     * Constant for LDAP attribute lockoutTime value.
+     */
+    
+    USER_ACCOUNT_LOCKED_VAL("16"),
+    
+    /**
+     * Constant for LDAP attribute lockoutTime to unlock user.
+     */
+    
+    
+    USER_ACCOUNT_UNLOCK_VAL("0"),
+    
+    
+    
+    
+    USER_ACCOUNT_CTRL_VAL("544"),
+    /**
+     * Constant for LDAP attribute userAccountControl value.
+     */
+    USER_ACCOUNT_DISABLE_CTRL_VAL("514"),
+    /**
+     * Constant for LDAP attribute mail.
+     */
+    MAIL("mail"),
+    /**
+     * Constant for LDAP attribute uid.
+     */
+    UID("uid"),
+    /**
+     * Constant for LDAP attribute sAMAccountName.
+     */
+    SAM_ACCOUNT_NAME("sAMAccountName"),
+    /**
+     * Constant for LDAP attribute userPrincipalName.
+     */
+    USER_PRINCIPAL_NAME("userPrincipalName"),
+    
+    /**
+     * Constant for LDAP attribute userPrincipalName.
+     */
+    REGISTERED_INDICATOR("registeredIndicator"),
+    
+    /**
+     * Constant for LDAP attribute userPrincipalName.
+     */
+    END_TARGET_URL("endTargetUrl"),
+    
+    REGISTERED("REGISTERED"),
+    
+    
+    
+    /**
+     * Constant for LDAP attribute preferredRole.
+     */
+    PREFERRED_ROLE("preferredRole"),
+    /**
+     * Constant for LDAP attribute role.
+     */
+    ROLE("role"),
+    /**
+     * Constant for LDAP attribute user.
+     */
+    USER("user"),
+    /**
+     * Constant for LDAP attribute lastName.
+     */
+    LAST_NAME("lastName"),
+    /**
+     * Constant for LDAP attribute firstName.
+     */
+    FIRST_NAME("firstName"),
+    /**
+     * Constant for LDAP attribute objectClass.
+     */
+    OBJECT_CLASS("objectClass"),
+    /**
+     * Constant for LDAP top DN.
+     */
+    DOMAIN_NAME("DC=thf,DC=thehartford,DC=sapient,DC=com"),
+    /**
+     * Constant for status fail.
+     */
+    FAIL("fail"),
+    /**
+     * Constant for status success.
+     */
+    SUCCESS("success"),
+    /**
+     * Constant for LDAP attribute version.
+     */
+    LDAP_VER("3"),
+    /**
+     * Account expires attribute.
+     */
+    ACCOUNT_EXPIRES("accountExpires"),
+    /**
+     * Account expires Number.
+     */
+    ACCOUNT_EXPIRES_NUMBER("9223372036854775807"),
+    /**
+     * Message for LDAP connection error.
+     */
+    LDAP_CONNECTION_ERROR("ConnectionPool could not be created!!"),
+    /**
+     * Message for LDAP connection error.
+     */
+    LDAP_CONNECTION_ERROR_ARG("ConnectionPool could not be created :: {}"),
+    /**
+     * Message for LDAP Exception.
+     */
+    LDAP_EXCEPTION("LDAPException Occurred!!"),
+    /**
+     * MBean Object name String.
+     */
+    MBEAN_OBJECT_NAME("com.adobe.granite.ldap:host=%s,port=%s,type=Tools"),
+    /**
+     * Account expires date Number.
+     */
+    ACCOUNT_EXPIRES_DATE_NUMBER("116444736000000000"),
+    /**
+     * Constant for db.
+     */
+    PERSISTENCE_TYPE_DB("db"),
+    /**
+     * Constant for CRX.
+     */
+    PERSISTENCE_TYPE_CRX("crx"),
+    /**
+     * Constant for XML.
+     */
+    FILE_TYPE_XML("XML"),
+    /**
+     * Constant for CSV.
+     */
+    FILE_TYPE_CSV("CSV"),
+    /**
+     * Constant for DB server url.
+     */
+    JDBC_URL("jdbc:sqlserver://10.207.7.206\\MSSQLServer;database=thfdb4"),
+    /**
+     * Constant for jpa weaving attribute.
+     */
+    WEAVING_STATIC("static"),
+    /**
+     * Constant for jdbc url.
+     */
+    PROP_JDBC_URL("jdbc.url"),
+    /**
+     * Constant for jdbc username.
+     */
+    PROP_JDBC_USER("jdbc.user"),
+    /**
+     * Constant for jdbc pwd.
+     */
+    PROP_JDBC_PWD("jdbc.password"),
+    /**
+     * Constant for jdbc url.
+     */
+    PROP_PUBLISH_JDBC_URL("publish.jdbc.url"),
+    /**
+     * Constant for jdbc username.
+     */
+    PROP_PUBLISH_JDBC_USER("publish.jdbc.user"),
+    /**
+     * Constant for jdbc pwd.
+     */
+    PROP_PUBLISH_JDBC_PWD("publish.jdbc.password"),
+    /**
+     * Constant for logging level.
+     */
+    PROP_JDBC_LOG_LEVEL("logging.level"),
+    /**
+     * Constant for pattern comma.
+     */
+    PATTERN_COMMA(","),
+    /**
+     * Constant for pattern comma.
+     */
+    PATTERN_SPACE(" "),
+    /**
+     * Constant for UTF8 string.
+     */
+    UTF8("UTF-8"),
+    
+    /** UTF-16LE. */
+    UTF16_LE("UTF-16LE"),
+    /**
+     * Constant for Address Line1.
+     */
+    ADDRESS_LN1("addressLn1"),
+    /**
+     * Constant for Address Line2.
+     */
+    ADDRESS_LN2("addressLn2"),
+    /**
+     * Constant for state.
+     */
+    STATE("state"),
+    /**
+     * Constant for city1.
+     */
+    CITY("city"),
+    /**
+     * Constant for Zip Code.
+     */
+    ZIP("zipCode"),
+    /**
+     * Constant for Institutional Investors.
+     */
+    INSTITUTIONAL_INVESTORS("Institutional Investors"),
+    /**
+     * Constant for FA BRANCH ID.
+     */
+    BRANCH_ID("branch"),
+    /**
+     * Constant for FA City.
+     */
+    FA_CITY("city"),
+    /**
+     * Constant for FA Company.
+     */
+    FA_COMPANY("companyName"),
+    /**
+     * Constant for FA crd.
+     */
+    FA_CRD("crdNumber"),
+    /**
+     * Constant for FA First Name col in csv.
+     */
+    FA_FIRST_NAME("FIRST_NAME"),
+    /**
+     * Constant for FA Last Name col in csv.
+     */
+    FA_LAST_NAME("LAST_NAME"),
+    /**
+     * Constant for FA crd number col in csv.
+     */
+    FA_CRD_NO("CRD_NO"),
+    /**
+     * Constant for FA company col in csv.
+     */
+    FA_COMPANY_NAME("BD_NAME"),
+    /**
+     * Constant for FA State col in csv.
+     */
+    FA_STATE("STATE"),
+    /**
+     * Constant for FA Email col in csv.
+     */
+    EMAIL("EMAIL"),
+    /**
+     * Constant for FA City col in csv.
+     */
+    FA_CITY_COL("CITY"),
+    /**
+     * Constant for Individual Investors.
+     */
+    INDIVIDUAL_INVESTORS("Individual Investors"),
+    /**
+     * Constant for Financial Advisors.
+     */
+    FINANCIAL_ADVISORS("Financial Advisors"),
+    /**
+     * Constant for Sales Assistants.
+     */
+    SALES_ASSISTANT("Sales Assistant"),
+    /**
+     * Message for EM status null or close.
+     */
+    EM_NULL_OR_CLOSE("EntityManager is either null or closed : {}"),
+    /**
+     * Exception Occurred String.
+     */
+    EXCEPTION_OCCURRED("Database Exception Occurred : {}"),
+    /**
+     * Initialization Exception.
+     */
+    INIT_EXCEPTION("Initialization Exception : "),
+    /**
+     * Initialization Exception detail.
+     */
+    INIT_EXCEPTION_DETAIL("Could not initialize EntityManagerFactory"),
+    /**
+     * Property cannot be null.
+     */
+    PROP_VAL_NOT_NULL("Property Value can not be null or empty!"),
+    /**
+     * Closing EntityManager.
+     */
+    EM_CLOSE("Closing EntityManager : {}"),
+    /**
+     * Closing EntityTransaction.
+     */
+    ENTITY_TRANS_CLOSE("Closing EntityTransaction : {}"),
+    /**
+     * EMF not created.
+     */
+    EMF_NOT_CREATED("Could not create the EntityManagerFactory"),
+    /**
+     * No DB driver found.
+     */
+    NO_DRIVER_FOUND("No Driver Found :"),
+    /**
+     * No records found String.
+     */
+    EXCEPTION_FETCH_RECORDS("Could not fetch the rocords : "),
+    /**
+     * Could not persist entity list.
+     */
+    COULD_NOT_PERSIST_LIST("Could not persist the entity List : "),
+    /**
+     * Could not persist entity list.
+     */
+    COULD_NOT_PERSIST_ENTITY("Could not persist the entity : "),
+    /**
+     * could not update the entity.
+     */
+    COULD_NOT_UPDATE_ENTITY("Could not update the entity : "),
+    /**
+     * Could not fetch the column values.
+     */
+    COULD_NOT_FETCH_COLUMN_VALUES("Could not fetch the column values : "),
+    /**
+     * could not remove the entity.
+     */
+    COULD_NOT_REMOVE_ENTITY("Could not remove the entity : "),
+    /**
+     * could not remove the records.
+     */
+    COULD_NOT_REMOVE_RECORDS("Could not remove the records : "),
+    /**
+     * Entity not found String.
+     */
+    ENTITY_NOT_FOUND("Could not find the entity : "),
+    /**
+     * Select statement.
+     */
+    SELECT_STMT("SELECT t FROM "),
+    /**
+     * Select statement.
+     */
+    SELECT_COLUMN_STMT("SELECT distinct t."),
+    /**
+     * Delete statement.
+     */
+    DELETE_STMT("DELETE FROM "),
+    /**
+     * Truncate statement.
+     */
+    TRUNCATE_STMT("TRUNCATE TABLE "),
+    /**
+     * FA Table.
+     */
+    FA_TABLE("THF_FINANCIAL_ADVISOR"),
+    /**
+     * From clause.
+     */
+    FROM_CLAUSE(" FROM "),
+    /**
+     * Jpql query reference.
+     */
+    JPQL_QUERY_REF(" t "),
+    /**
+     * Where clause.
+     */
+    WHERE(" t WHERE t."),
+    /**
+     * Query parameter place holder.
+     */
+    QUERY_PLACEHOLDER(" = ?"),
+    /**
+     * AND predicate.
+     */
+    AND_PREDICATE(" and t."),
+    /**
+     * OR predicate.
+     */
+    OR_PREDICATE(" or t."),
+    /**
+     * IN operator.
+     */
+    IN_OP(" IN :inParams"),
+    
+    /** Constant inParams. */
+    IN_PARAMS("inParams"),
+    /**
+     * referenceCMS.
+     */
+    REFERENCE_CMS("referenceCMS"),
+    /**
+     * referenceCMS.
+     */
+    TAG("TAG"),
+    
+    /** Object GUID. */
+    OBJECT_GUID("objectGUID"),
+    /**
+     * JDBC driver.
+     */
+    JDBC_DRIVER("com.microsoft.sqlserver.jdbc.SQLServerDriver"),
+    /**
+     * Reset password key.
+     */
+    RESET_PWD_KEY("resetPwdKey"),
+    /**
+     * Header Content Type.
+     */
+    HEADER_CONTENT_TYPE("application/soap+xml"),
+    /**
+     * Https protocol.
+     */
+    HTTPS_PROTOCOL("https"),
+    /**
+     * Constant for LDAP attribute activationStatus.
+     */
+    ACTIVATION_STATUS("activationStatus"),
+     /**
+     * Constant for string Y.
+     */
+    STRING_Y("Y"),
+    /**
+     * Constant for string N.
+     */
+    STRING_N("N"),
+    /**
+     * Constant for status Success.
+     */
+    STATUS_SUCCESS("Success"),
+    /**
+     * Constant for status Failure.
+     */
+    STATUS_FAILURE("Failure"),
+    /**
+     * Constant for funds.
+     */
+    FUNDS("funds"),
+    /**
+     * Constant for KeyStore type.
+     */
+    JKS("JKS"),
+    /**
+     * Constant for SSL Scheme.
+     */
+    SSL("SSL"),
+    /**
+     * Constant for SunX509 algorithm.
+     */
+    X509("SunX509"),
+    /**
+     * Constant for JSSE provider.
+     */
+    JSSE("SunJSSE"),
+    /**
+     * Value zero.
+     */
+    ZERO_VALUE("0"),
+    /**
+     * HIFP csv headers.
+     */
+    HIFP_CSV_HEADERS(
+            "EMAIL,LAST NAME, FIRST NAME, ROLE, FAILURE REASON,"),
+    /**
+     * Value FA_FIRMNAME
+     * @author Sayantani
+     * @since 27th May 2014
+     */
+    FA_FIRMNAME("firmName");
+
+    /**
+     * value of the enum constant.
+     */
+    private final String value;
+
+    /**
+     * Custom Constructor.
+     * 
+     * @param value
+     *            the value
+     */
+    PersistenceConstants(String value) {
+
+        this.value = value;
+    }
+
+    /**
+     * Gets the value.
+     * 
+     * @return the value.
+     */
+    public String getValue() {
+
+        return this.value;
+    }
+
+}

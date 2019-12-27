@@ -1,0 +1,196 @@
+package com.arche11.core.servlets;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import javax.servlet.Servlet;
+import javax.servlet.ServletException;
+
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.SlingHttpServletResponse;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.servlets.HttpConstants;
+import org.apache.sling.api.servlets.SlingAllMethodsServlet;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.day.cq.search.PredicateGroup;
+import com.day.cq.search.Query;
+import com.day.cq.search.QueryBuilder;
+import com.day.cq.search.result.Hit;
+import com.day.cq.search.result.SearchResult;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+
+@Component(service=Servlet.class ,
+property = {
+	Constants.SERVICE_DESCRIPTION + "= Predicate Search Servlet",
+	"sling.servlet.methods=" + HttpConstants.METHOD_GET,
+	"sling.servlet.paths=" + "/bin/test/MySearchServlet"
+
+})
+public class MySearchServlet extends SlingAllMethodsServlet{
+
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
+	
+	private static final Logger LOGGER = LoggerFactory.getLogger(MySearchServlet.class);
+	
+	private static final String PROPERTRY_TRUE = "true";
+	private static final String SEARCH_PAGE_TYPE = "cq:Page";
+	private static final String SEARCH_DAM_TYPE = "dam:Asset";
+	private static final String DAM_PROPERTY = "@jcr:content/metadata/dc:format";
+	private static final String DAM_PROPERTY_VALUE = "application/pdf";
+	private static final String SEARCH_RESULT_PAGE_PATH = "path";
+	private static final String SEARCH_RESULT_PAGE_TITLE = "pageTitle";
+	private static final String SEARCH_RESULT_ICON_PATH = "iconPath";
+	private static final String SEARCH_RESULT_REVISED_DATE = "revised_date";
+	private static final String SEARCH_RESULT_DESCRIPTION = "description";
+	private static final String SEARCH_FULLTEXT = "fulltext";
+	private static final String SEARCH_GROUP_OR = "group.p.or";
+	private static final String SEARCH_GROUP_1_PATH = "group.1_group.path";
+	private static final String SEARCH_GROUP_1_TYPE = "group.1_group.type";
+	private static final String SEARCH_GROUP_1_PROPERTY="group.1_group.property";
+	private static final String SEARCH_GROUP_1_PROPERTY_OPERATION="group.1_group.property.operation";
+	private static final String SEARCH_GROUP_1_PROPERTY_OPERATION_VALUE="group.1_group.property.value";
+	private static final String SEARCH_GROUP_1_PROPERTY_1="group.1_group.1_property";
+	private static final String SEARCH_GROUP_1_PROPERTY_1_VALUE="group.1_group.1_property.value";
+	private static final String SEARCH_GROUP_1_PROPERTY_1_OPERATION="group.1_group.1_property.operation";
+	
+	private static final String SEARCH_GROUP_1_PROPERTY_2="group.1_group.2_property";
+	private static final String SEARCH_GROUP_1_PROPERTY_2_VALUE="group.1_group.2_property.value";
+	private static final String SEARCH_GROUP_1_PROPERTY_2_OPERATION="group.1_group.2_property.operation";
+	
+	private static final String SEARCH_GROUP_1_PROPERTY_3="group.1_group.3_property";
+	private static final String SEARCH_GROUP_1_PROPERTY_3_VALUE="group.1_group.3_property.value";
+	private static final String SEARCH_GROUP_1_PROPERTY_3_OPERATION="group.1_group.3_property.operation";
+	
+	private static final String SEARCH_GROUP_1_PROPERTY_4="group.1_group.4_property";
+	private static final String SEARCH_GROUP_1_PROPERTY_4_VALUE="group.1_group.4_property.value";
+	private static final String SEARCH_GROUP_1_PROPERTY_4_OPERATION="group.1_group.4_property.operation";
+	
+	private static final String SEARCH_GROUP_2_PATH = "group.2_group.path";
+	private static final String SEARCH_GROUP_2_TYPE = "group.2_group.type";
+	private static final String SEARCH_GROUP_2_PROPERTY = "group.2_group.property";
+	private static final String SEARCH_GROUP_2_PROPERTY_VALUE = "group.2_group.property.value";
+	private static final String SEARCH_LIMIT = "p.limit";
+	private static final String SEARCH_RESULT_TYPE = "type";
+	
+	private static final String CQ_TEMPLATE="@jcr:content/cq:template";
+	private static final String EXLUDE_PROPERTY_NAME="jcr:content/isexcluded";
+	private static final String EXLUDE_PROPERTY_OPERATION="exists";
+	private static final String EXLUDE_PROPERTY_VALUE="false";
+    private static final String REDIRECT_TEMPLATE_PATH="/apps/smart529/templates/redirect";
+	private static final String FUND_DETAILS_PATH="/apps/smart529/templates/funddetails";
+	private static final String DATAPAGE_TEMPLATE="/apps/smart529/templates/datapage";
+	private static final String SEARCH_TEMPLATE="/apps/smart529/templates/searchresult";
+	private static final String UNEQUALS="unequals";
+	
+	@Reference
+	private QueryBuilder builder;
+	
+	@Override
+	protected void doGet(SlingHttpServletRequest request,
+			SlingHttpServletResponse response) throws ServletException,
+			IOException {
+
+		String pagePath = "";
+		String damPath = "";
+		//String searchTerm = request.getParameter("keyword");
+		//pagePath = request.getParameter("pagepath");
+		//damPath = request.getParameter("dampath");
+		//String excludePagePath=request.getParameter("excludePagePath");
+		Session session = request.getResourceResolver().adaptTo(Session.class);
+		ResourceResolver resolver = request.getResourceResolver();
+		Map<String, String> map = new HashMap ();
+		JsonArray jsonarray = new JsonArray();
+		map.put(MySearchServlet.SEARCH_FULLTEXT, "arctic-surfing-in-lofoten");
+		
+		map.put(MySearchServlet.SEARCH_GROUP_OR, MySearchServlet.PROPERTRY_TRUE);
+		
+		map.put(MySearchServlet.SEARCH_GROUP_1_PATH, "/content/we-retail/us/en");
+		map.put(MySearchServlet.SEARCH_GROUP_1_TYPE,MySearchServlet.SEARCH_PAGE_TYPE);
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY,EXLUDE_PROPERTY_NAME);
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_OPERATION, EXLUDE_PROPERTY_OPERATION);
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_OPERATION_VALUE, EXLUDE_PROPERTY_VALUE);
+				
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_1, CQ_TEMPLATE);
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_1_VALUE, FUND_DETAILS_PATH);
+		map.put(SEARCH_GROUP_1_PROPERTY_1_OPERATION, UNEQUALS);
+		
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_2, CQ_TEMPLATE);
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_2_VALUE, REDIRECT_TEMPLATE_PATH);
+		map.put(SEARCH_GROUP_1_PROPERTY_2_OPERATION, UNEQUALS);
+		
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_3, CQ_TEMPLATE);
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_3_VALUE, DATAPAGE_TEMPLATE);
+		map.put(SEARCH_GROUP_1_PROPERTY_3_OPERATION, UNEQUALS);
+		
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_4, CQ_TEMPLATE);
+		map.put(MySearchServlet.SEARCH_GROUP_1_PROPERTY_4_VALUE, SEARCH_TEMPLATE);
+		map.put(SEARCH_GROUP_1_PROPERTY_4_OPERATION, UNEQUALS);
+		
+		
+		map.put(MySearchServlet.SEARCH_GROUP_2_PATH, "/content/dam/we-retail/en/experiences/arctic-surfing-in-lofoten");
+		map.put(MySearchServlet.SEARCH_GROUP_2_TYPE,MySearchServlet.SEARCH_DAM_TYPE);
+		map.put(MySearchServlet.SEARCH_GROUP_2_PROPERTY,MySearchServlet.DAM_PROPERTY);
+		map.put(MySearchServlet.SEARCH_GROUP_2_PROPERTY_VALUE,MySearchServlet.DAM_PROPERTY_VALUE);
+		
+		map.put(MySearchServlet.SEARCH_LIMIT, "-1");
+
+		Query query = builder.createQuery(PredicateGroup.create(map), session);
+
+		SearchResult result = query.getResult();
+		
+		LOGGER.info("query is"+result.getQueryStatement());
+		
+		for (Hit hit : result.getHits()) {
+			JsonObject jsonObject = new JsonObject();
+			try {
+				LOGGER.info("result is"+hit.getPath());
+				jsonObject.addProperty("title", hit.getTitle());
+				jsonObject.addProperty("resourcePath", hit.getPath());
+				
+				jsonarray.add(jsonObject);
+			} catch (RepositoryException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+		LOGGER.debug("am here before the response");
+		response.getWriter().write(jsonarray.toString());
+
+	/*
+	 * xpath query format for above query builder
+	 * 
+	 * (/jcr:root/content/we-retail/us/en//element(*, cq:Page)
+
+[(not(jcr:content/@isexcluded) and 
+
+jcr:content/@cq:template != '/apps/smart529/templates/funddetails' and 
+jcr:content/@cq:template != '/apps/smart529/templates/redirect' and 
+jcr:content/@cq:template != '/apps/smart529/templates/datapage' and 
+jcr:content/@cq:template != '/apps/smart529/templates/searchresult') and 
+
+(jcr:contains(., 'arctic-surfing-in-lofoten'))] 
+
+|
+
+ /jcr:root/content/dam/we-retail/en/experiences/arctic-surfing-in-lofoten//element(*,dam:Asset)
+ 
+ [(jcr:content/metadata/@dc:format = 'application/pdf') and 
+ 
+ (jcr:contains(., 'arctic-surfing-in-lofoten'))])
+ 
+ */
+	}
+
+}

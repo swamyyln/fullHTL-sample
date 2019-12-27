@@ -1,0 +1,153 @@
+package com.thehartford.thf.ui.servlets;
+
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.osgi.service.component.annotations.Reference;
+
+import com.adobe.cq.sightly.WCMUsePojo;
+import com.thehartford.thf.core.logging.LoggerUtil;
+import com.thehartford.thf.core.util.EncryptionUtil;
+import com.thehartford.thf.ui.services.AdminSessionService;
+
+public class CustomResponseStatus extends WCMUsePojo{
+
+	
+	 boolean resourceflag=false;
+	 boolean isCurrentPathValid=false;
+	 String myErrorPageUrl=null;
+    
+	
+	 
+
+	    @Override
+	    public void activate() throws Exception {
+	    	 
+	   LoggerUtil.debugLog(this.getClass(), "Inside activate method of CustomResponseStatus");
+	   try{
+		   String currentDomain=getRequest().getServerName();
+	   if(this.getLinkHasValidPath()){
+		   if(currentDomain.contains("hartfordfunds")){
+		   LoggerUtil.debugLog(this.getClass(), "Inside activate method of CustomResponseStatus with vaild path");
+		        if(this.getRequestPathUrl()){
+		        	 LoggerUtil.debugLog(this.getClass(), "Inside activate method of CustomResponseStatus with vaild path");
+		         getResponse().setStatus(302);
+		         getResponse().sendRedirect("/home.html?rtype="+getRequest().getRequestPathInfo().getResourcePath()+"/showloginWindow");
+		        }else{
+		         getResponse().setStatus(403);
+		         myErrorPageUrl="/content/thf/en/error.403.html";
+		        }
+		   }
+	   }else{
+	             getResponse().setStatus(404);
+		        if(currentDomain.contains("hartfordfunds")){
+		           myErrorPageUrl="/content/thf/en/error.404.html";	
+		        	}
+		        if(currentDomain.contains("smart529")){
+			           myErrorPageUrl="/content/smart529/en/404.html";
+			        }
+		        if(currentDomain.contains("smart529select")){
+			           myErrorPageUrl="/content/smart529select/en/404.html";
+			        }
+	   }  
+	   }catch(Exception e){
+		   e.printStackTrace();
+		   LoggerUtil.errorLog(this.getClass(), "Inside activate method of CustomResponseStatus "+e.getMessage());		   
+	   }
+
+	   }
+
+	    public String getErrorRedirectPath(){
+	        return myErrorPageUrl;
+	    }
+
+	    public boolean getRequestPathUrl(){	
+	      String currentReqPath=getRequest().getRequestPathInfo().getResourcePath();       
+	        if(null!=currentReqPath){
+		  LoggerUtil.debugLog(this.getClass(), "Inside getRequestPathUrl method of CustomResponseStatus with path="+currentReqPath);
+	        if(currentReqPath.contains("profile-pages") || currentReqPath.contains("cart-pages") 
+	        		|| currentReqPath.contains("auth-pages")){
+	        	this.resourceflag=true;
+	        }else if(currentReqPath.contains("auth") && currentReqPath.contains("/dam/")){
+	        	this.resourceflag=true;
+	        }else{ 
+	        	this.resourceflag=false;
+	        }
+	     }
+	        else{
+	       LoggerUtil.debugLog(this.getClass(), "Inside getRequestPathUrl method of CustomResponseStatus with currentReqPath null");	
+	        }
+	        
+	        return resourceflag;
+	    }
+
+	    public boolean getLinkHasValidPath(){
+
+	        AdminSessionService adminSessionService =null;
+	        Session adminSession = null;
+	       
+	        try {
+	        String currentReqPath=getRequest().getRequestPathInfo().getResourcePath(); 
+	        LoggerUtil.debugLog(this.getClass(), "Inside getLinkHasValidPath method path before encoding :"+currentReqPath);  
+	        currentReqPath = EncryptionUtil.decodedUrl(currentReqPath, "UTF-8");
+	        LoggerUtil.debugLog(this.getClass(), "Inside getLinkHasValidPath method path After encoding :"+currentReqPath);  
+	        adminSessionService = getSlingScriptHelper().getService(AdminSessionService.class);
+
+	        if(null!=adminSessionService){
+				adminSession = adminSessionService.getAdminSession(getRequest());
+	            if(null!=adminSession){
+	              
+	            	if (StringUtils.startsWithIgnoreCase(currentReqPath, "/content/dam")) {
+	               LoggerUtil.debugLog(this.getClass(), "Inside getLinkHasValidPath method if /content/dam/ with path {}", currentReqPath);
+	                    if (adminSession.nodeExists(currentReqPath)) {
+	                  LoggerUtil.debugLog(this.getClass(), "Inside getLinkHasValidPath method if condition node exists true for path{}", currentReqPath);
+	                        this.isCurrentPathValid = true;
+	                    }
+	                } else {
+	                	//if resource is content pages then remove extension and selector if any
+	                	 LoggerUtil.debugLog(this.getClass(), "Inside getLinkHasValidPath else with /content path {}", currentReqPath);
+	                    final int i = currentReqPath.indexOf(".");
+	                    if (i != -1) {
+	                    	currentReqPath = currentReqPath.substring(0, i);
+	                    }
+	                    if (adminSession.nodeExists(currentReqPath)) {
+	                    	 LoggerUtil.debugLog(this.getClass(), "Inside getLinkHasValidPath else condition node exists true for path{}", currentReqPath);
+	                        this.isCurrentPathValid = true;
+	                    }
+	                }
+	            }else{
+	            	 LoggerUtil.debugLog(this.getClass(), "Inside getLinkHasValidPath method adminSession is null");     
+	            }
+	        }else{
+	        	  LoggerUtil.debugLog(this.getClass(), "Inside getLinkHasValidPath method adminSessionService is null");
+	        }
+	        } catch (RepositoryException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}finally {
+				if (adminSession != null && adminSession.isLive()) {
+					adminSession.logout();
+					}
+			}
+	        return isCurrentPathValid;
+
+}
+}
+
+--------------------------------------------------------------------------------------------------------------------------------------
+Error Handler location : /apps/sling/servlet/errorhandler/404.html
+
+--------------------------Sightly code to invoke wcm usePojo class ------------------------------------------------------------------
+<html data-sly-use.responseStatus="com.thehartford.thf.ui.servlets.CustomResponseStatus">
+<head>
+<title>Error | Hartford Funds </title>
+</head>
+<sly data-sly-test.flag="${responseStatus.LinkHasValidPath}"/>
+
+    <sly data-sly-test="${!flag}">
+       <sly data-sly-resource="${responseStatus.ErrorRedirectPath}"/>
+        </sly>
+</html>
+------------------------------------------------------------------------------------------------------------------------------------

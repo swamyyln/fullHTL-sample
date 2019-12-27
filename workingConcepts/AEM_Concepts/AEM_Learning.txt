@@ -1,0 +1,21 @@
+Classic UI Navigation customization
+
+/libs/cq/core/content/nav/tools/operations/webconsole
+
+
+-------------------------------------------------------------
+
+dto=Data Transfer Objects
+
+-------------------------------------------------------------
+Difference between Data-sly-list and data-sly-repeat
+
+list
+<ul data-sly-list="${currentPage.listChildren}">
+<li>${item.name}</li>
+</ul>
+
+repeat
+<ul data-sly-repeat="${currentPage.listChildren}">
+<li>${item.name}</li>
+</ul>

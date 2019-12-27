@@ -1,0 +1,262 @@
+﻿SIT Author Upgrade
+
+1)No Running Workflows
+
+2)Workflow Launchers disabled
+
+3)Replication Agents disabled
+
+4)Deleted Inbox items (/etc/taskmanagement/delete_tasks_folder)
+
+6)Moved the following folders to /tmp/todelete
+	/var/audit
+	/var/eventing/jobs
+	/var/replication/data
+	
+7)Stop AEM 6.1 instance
+
+8)Start AEM 6.1 instance
+
+9)Install package pre-upgrade-tasks-content-cq61-1.1.8
+
+10)follow AEM_Upgrade doc from now for JMX console steps
+			runAllPreUpgradeTasks()
+			detectUsageOfUnavailableAPI()
+			runAllPreUpgradeHealthChecks()
+			
+11)remove preUpgradeHCStatus.properties from crx-quickstart location
+
+12)Remove All log files under crx-quickstart/logs
+
+13)Replace AEM_6.3 jar/licence.properties [cq5-author-p4502.jar] 
+(Change chmod 777 to sitAuthor Folder) inplace of 6.1 jar/licence.properties
+
+14)delete jar under /crx-quickstart/app if there are any related to 6.1 
+
+15)Verify java –version to make sure that $JAVA_HOME is configure
+
+16)To change the owner [chown root:root cq5-author-p4502.jar]
+
+17)Unpack the new quickstart jar by running:
+       java -Xmx4096m -jar cq5-author-p4502.jar –unpack
+	   
+	   below logs will populate
+	   
+	   [root@ip-10-38-3-12 sitAuthor]# java -Xmx4096M -jar cq5-author-p4502.jar -unpack
+Loading quickstart properties: default
+Loading quickstart properties: instance
+Setting properties from filename '/data/aem6.3/sitAuthor/cq5-author-p4502.jar'
+Option '-quickstart.server.port' set to '4502' from filename cq5-author-p4502.jar
+Verbose mode - stdout/err not redirected to files, and stdin not closedResourceProvider paths=[/gui, /gui/default]
+quickstart.build=0.0.0.0_0_0_6_3_.20170420
+Build number changed, running in upgrade mode
+UpgradeUtil.handleInstallAndUpgrade has mode UPGRADE
+Upgrade: no files to restore from pre-upgrade backup
+File exists and cannot be overwritten, extracted to start.NEW_20180502_061936_936 instead of /data/aem6.3/sitAuthor/crx-quickstart/bin/start
+File exists and cannot be overwritten, extracted to quickstart.NEW_20180502_061936_936 instead of /data/aem6.3/sitAuthor/crx-quickstart/bin/quickstart
+File exists and cannot be overwritten, but unchanged: /data/aem6.3/sitAuthor/crx-quickstart/bin/status
+File exists and cannot be overwritten, extracted to stop.NEW_20180502_061936_936 instead of /data/aem6.3/sitAuthor/crx-quickstart/bin/stop
+33 files extracted from jar file
+Upgrade: no files to restore from pre-upgrade backup
+Running chmod +x /data/aem6.3/sitAuthor/crx-quickstart/bin/start
+Running chmod +x /data/aem6.3/sitAuthor/crx-quickstart/bin/stop
+Running chmod +x /data/aem6.3/sitAuthor/crx-quickstart/bin/status
+Running chmod +x /data/aem6.3/sitAuthor/crx-quickstart/bin/quickstart
+Not starting the Quickstart server as the -unpack option is set
+Quickstart files unpacked, server startup scripts can be found under /data/aem6.3/sitAuthor/crx-quickstart
+[root@ip-10-38-3-12 sitAuthor]#
+
+18)Verify whether crx2oak.jar file is present in the crx-quickstart/opt/extensions/crx2oak.jar 
+
+19)Start repository migration
+
+java -Xmx4096m -XX:MaxPermSize=2048m -jar cq5-author-p4502.jar -v -x crx2oak -xargs -- --load-profile segment-no-ds
+
+----***COMPLETED****-------
+
+20)Start AEM to bring up the instance for the inplace upgrade
+         java -Xmx4096m -XX:MaxPermSize=2048m -jar cq5-author-p4502.jar
+		 
+21)We will be able to login to CRX Explorer
+
+22)But to login to "crx/de/index.jsp" check below helpx Adobe
+https://helpx.adobe.com/experience-manager/6-3/sites/administering/using/enabling-crxde-lite.html
+
+23)After login to crxde install packages in below order
+
+Service_Pack
+Feature_Pack
+acs-commons-content
+acs-tools-content
+sling Models
+netty
+thf-full package
+
+24)Change start file configuartions for author (vi start)
+
+add below line
+echo "AEM 6.3 SIT_Author START:" `date`>>/data/aem6.3/scripts/ServerStatusLog.txt
+
+CQ_PORT=4502
+CQ_RUNMODE='author,sit'
+CQ_JVM_OPTS='-server -Xmx4096m  -Xms4096m -XX:MaxPermSize=1024M -Djava.awt.headless=true
+ -Doak.queryLimitInMemory=500000 -Doak.queryLimitReads=10000000 -Dupdate.limit=250000  -Doak.fastQuerySize=true'
+
+to insert "i"
+To save :wq
+to quit abruptly :q!
+
+---------------------------------------------------------------------------------------------------------------------
+Permissions:
+1)Give permissions to sling-scripting and thf-sysytem-user /content /apps /etc jcr =read
+2)/etc/designs --anonymous user jcr:read
+
+CONFIGURATIONS :
+
+AUTHOR
+1)Need to add TOUCH (to make it as default touch UI)
+
+[com.day.cq.wcm.core.impl.AuthoringUIModeServiceImpl
+authoringUIModeService.default=TOUCH]
+
+2)Change defaultGetServlet
+[org.apache.sling.servlets.get.DefaultGetServlet
+json.maximumresults=2000]
+
+3)FA Workflow related config changes
+
+4)Verfiy Apache Sling Service User Mapper Service
+
+5)Adobe Granite Repository Service User Configuration (remove sling-scripting and thf-system-user)
+
+6)jmx-->queryEngineSettings-->[limitreads=10000000]
+
+7)Need to upload this package-->/libs/cq/workflow/Kindly Approve All Syntheis Supporting Nodes As Well like { glidepath , benchmark , peergroup}
+
+---------------------------------------------------------------------------------------------------------------------
+PUBLISH
+
+1)Apache Sling Login Admin Whitelist (Check By Pass whitelist)
+
+
+PACKAGES :
+
+fonts.zip
+/etc/maps
+/content/campaigns/hartford-funds (FOR WHY REGISTER OVERLAY in PUBLISH)
+
+AUTHOR
+/etc/cloudservices
+/etc/segmentation
+/etc/notification
+/libs/cq/workflow/Kindly Approve All Syntheis Supporting Nodes As Well like { glidepath , benchmark , peergroup}
+
+Index creation
+/oak:index/propertyIndex3 needs to add.
+
+
+---------------------------------------------------------------------------------------------------------------------
+
+Workflow Purge :
+ADOBE GRANITE WORKFLOW PURGE SCHEDULER
+
+1) /apps/system/config/com.adobe.granite.workflow.purge.Scheduler-ccbc37d0-7ca5-487a-94fe-2d7105b98a34.config
+[scheduledpurge.name="PurgeLongRunning"
+scheduledpurge.daysold=I"7"]
+
+2)/apps/system/config/com.adobe.granite.workflow.purge.Scheduler-ccbc37d0-7ca5-487a-94fe-2d7105b98a34.config
+[scheduledpurge.name="PurgeCompleted"
+scheduledpurge.daysold=I"7"]
+
+3) scheduledpurge.modelIds=["/etc/workflow/models/aem-mobile-insights-article-approve-publish-workflow/jcr:content/model","/etc/workflow/models/aem-mobile-insights-article-create-rebranded-app-workflow/jcr:content/model","/etc/workflow/models/aem-mobile-insights-article-create-workflow/jcr:content/model","/etc/workflow/models/aem-mobile-insights-article-unpublish-workflow/jcr:content/model","/etc/workflow/models/aem-mobile-sales-article-approve-publish-workflow/jcr:content/model","/etc/workflow/models/aem-mobile-sales-article-create-rebranded-app-workflow/jcr:content/model","/etc/workflow/models/aem-mobile-sales-article-create-workflow/jcr:content/model","/etc/workflow/models/aem-mobile-sales-article-unpublish-workflow/jcr:content/model","/etc/workflow/models/contact-us-daily-report/jcr:content/model","/etc/workflow/models/content-approval-publish/jcr:content/model","/etc/workflow/models/content-expiry-workflow/jcr:content/model","/etc/workflow/models/content-publishing-workflow/jcr:content/model","/etc/workflow/models/request-for-approval/jcr:content/model","/etc/workflow/models/dam-xmp-writeback/jcr:content/model","/etc/workflow/models/dam/dam_set_last_modified/jcr:content/model","/etc/workflow/models/dam/update_asset/jcr:content/model","/etc/workflow/models/fa-data-migration-workflow/jcr:content/model","/etc/workflow/models/full-holdings-migration-workflow/jcr:content/model","/etc/workflow/models/literature-subscriptions-process-workflow/jcr:content/model","/etc/workflow/models/my-funds-report/jcr:content/model","/etc/workflow/models/synchronize-deactivated-documents/jcr:content/model","/etc/workflow/models/synchronize-documents-workflow/jcr:content/model","/etc/workflow/models/synchronize-asset-resource-process/jcr:content/model","/etc/workflow/models/synthesis-content-approval-workflow/jcr:content/model","/etc/workflow/models/synthesis-content-publish-workflow/jcr:content/model","/etc/workflow/models/synthesis-document-migration/jcr:content/model","/etc/workflow/models/thf-add-firm-workflow/jcr:content/model","/etc/workflow/models/thf-update-page-and-dam-impressions-process/jcr:content/model","/etc/workflow/models/veritas-document-syncrhronization-workflow/jcr:content/model","/etc/workflow/models/pre-registration-users-workflow/jcr:content/model"]
+
+--------------------------------------------------------------------------------------------------------------------------------
+Mobile Apps article "Edit" option
+
+1) /libs/mobileapps/dps/admin/content/dashboard/entities/jcr:content/page/actions/selection/openarticle
+[activeSelectionCount String single]
+
+2) /libs/mobileapps/dps/gui/components/list/coral/entity/entitycommon.jsp
+
+------------------------------------------------------------------------------------------------------
+
+THF offline clean up is needed before upgrading the prod instance
+
+[Path=/data_new/aem6.1/author-4502/crx-quickstart/repository/segmentstore/]
+1)Find old check points
+java -Dtar.memoryMapped=true -jar oak-run-1.6.3.jar checkpoints /data_new/aem6.1/author-4502/crx-quickstart/repository/segmentstore
+
+2)Remove unreferenced checkpoints
+java -Dtar.memoryMapped=true -jar oak-run-1.6.3.jar checkpoints /data_new/aem6.1/author-4502/crx-quickstart/repository/segmentstore rm -unreferenced
+
+3)Compact
+java -Dtar.memoryMapped=true -jar oak-run-1.6.3.jar compact /data_new/aem6.1/author-4502/crx-quickstart/repository/segmentstore
+
+Verification:
+
+Check for below logs
+       Fri May 18 08:59:11 EDT 2018, data00608b.tar
+        Fri May 18 08:59:11 EDT 2018, data00596c.tar
+        Fri May 18 08:59:11 EDT 2018, data00589c.tar
+        Fri May 18 08:59:13 EDT 2018, data00588b.tar
+        Fri May 18 08:59:13 EDT 2018, data00418c.tar
+        Fri May 18 08:59:13 EDT 2018, data00415c.tar
+        Fri May 18 08:59:14 EDT 2018, data00396c.tar
+    size 84.8 GB (84776313578 bytes)
+    removed files [data00611a.tar, data00615a.tar, data00620a.tar, data00499b.tar, data00606a.tar, data00607a.tar, data00596b.tar, data00626a.tar, data00605a.tar, data00603a.tar, data00618a.tar, data00598a.tar, data00623a.tar, data00613a.tar, data00588a.tar, data00418b.tar, data00625a.tar, data00621a.tar, data00608a.tar, data00396b.tar, data00617a.tar, data00600a.tar, data00601a.tar, data00610a.tar, data00616a.tar, data00609a.tar, data00612a.tar, data00415b.tar, data00614a.tar, data00599a.tar, data00624a.tar, data00602a.tar, data00604a.tar, data00622a.tar, data00597a.tar, data00589b.tar, data00619a.tar]
+    added files [data00609b.tar, data00626b.tar, data00636a.tar, data00635a.tar, data00628a.tar, data00631a.tar, data00588b.tar, data00610b.tar, data00633a.tar, data00630a.tar, data00589c.tar, data00634a.tar, data00418c.tar, data00396c.tar, data00608b.tar, data00596c.tar, data00415c.tar, data00629a.tar, data00614b.tar, data00632a.tar]
+Compaction succeeded in 1.952 min (117s).
+[root@ip-10-39-3-18 aem6.1]# cd author-4502/crx-quickstart/repository/
+[root@ip-10-39-3-18 repository]# du -sh
+84G.
+---------------------------------------------------------------------------------------------------------
+THF Revision clean up online *** online compaction
+
+1)localhost:4502/system/console/configMgr -->oak segment Tar NodeStore Service
+
+OR
+
+2)Go to JMX Console
+--Find for Mbean "org.apache.jackrabbit.oak: Segment node store revision garbage collection"
+--Configure "GcSizeDeltaEstimation value in KB" (This value is to estimate whether compaction is needed from last run)
+--Check "LastLogMessage" for cleaned up disk Space value.
+--startGC
+
+if compaction not started ,we will get below msg in jmx console
+	TarMK GC #2: estimation completed in 1.124 ms (0 ms). Segmentstore size has increased since the last garbage collection from 253.7 MB (253736448 bytes) to 254.1 MB (254060544 bytes), an increase of 324.1 kB (324096 bytes) or 0%. This is less than sizeDeltaEstimation=1.1 GB (1073741824 bytes), so skipping garbage collection
+	
+3)RevisionGCRunning property should be false
+	
+4)After RevisionGC check below JMX property
+"LastReclaimedSize"
+------------------------------------------------------------------------------------------------------------
+
+AuditLog node purge task(/var/audit/log nodes)
+-------------------------------------------------------------------------------------------------------------
+Version purge task (jcr:system/jcr:version)
+
+create a configuration for PID=com.day.cq.wcm.core.impl.VersionManagerImpl
+------------------------------------------------------------------------------------------------------------
+Change launcher configuration for DAM Metadata writeback in prod
+------------------------------------------------------------------------------------------------------------
+For workflow session related issues (session.terminate,session.complete,session.suspend not working from code then)
+
+1.Check in webconsole-->Components--> "/system/console/configMgr/com.adobe.granite.workflow.core.WorkflowSessionFactory".
+
+2.List of super-users should be below
+===================
+admin
+administrators
+workflow-process-service
+workflow-users
+workflow-user-service
+workflow-repo-reader-service
+workflow-administrators
+===================
+3.Check "/etc/workflow/instances" node level permissions.
+------------------------------------------------------------------------------------------------------------
+SSL CONFIGURATION from inbox folder
+------------------------------------------------------------------------------------------------------------
+
+
+

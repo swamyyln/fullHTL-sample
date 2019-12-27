@@ -1,0 +1,1831 @@
+---------------------------------------process 1-------------------
+
+package com.arche11.core.workflow;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.adobe.granite.workflow.WorkflowException;
+import com.adobe.granite.workflow.WorkflowSession;
+import com.adobe.granite.workflow.exec.WorkItem;
+import com.adobe.granite.workflow.exec.WorkflowProcess;
+import com.adobe.granite.workflow.metadata.MetaDataMap;
+import com.day.cq.dam.api.AssetManager;
+import com.day.cq.replication.Replicator;
+
+@Component(service=WorkflowProcess.class,property={"process.label=myCreateZipFileAsDAMProcess",
+        Constants.SERVICE_DESCRIPTION+"=This is my custom DAM zip Workflow"})
+public class CreateZipFileAsDAMAssetProcess  implements WorkflowProcess {
+
+	
+private static Logger log=LoggerFactory.getLogger(CreateZipFileAsDAMAssetProcess.class);
+	
+	private File file;
+	
+	private static final String FILE_PATH="C:/Users/YE20004956/Desktop/UNARCHIVER_Process_Test/";
+	private static  String FILE_NAME=null;
+	private static final String DAM_LOCATION="/content/dam/unarchival_test/";
+	
+	@Reference
+	private ResourceResolverFactory rrf;
+	
+	@Override
+	public void execute(WorkItem workItem, WorkflowSession wfSession, MetaDataMap metadataMap)
+			throws WorkflowException {
+		log.info("DamAssetRenditionCreationPublishProcess execute method");
+		Session session=null;
+		ResourceResolver rr = null;
+		InputStream inputStream=null;
+		
+		Map<String, Object> param = new HashMap<String, Object>();
+        param.put(ResourceResolverFactory.SUBSERVICE, "myWorkflowInvokeService");
+        
+        
+        try {
+			rr=rrf.getServiceResourceResolver(param);
+			session=rr.adaptTo(Session.class);
+			log.info("DamAssetRenditionCreationPublishProcess session user ="+session.getUserID());
+			
+			//---READ ZIP file from FOLDER START
+			  File folder = new File(FILE_PATH);
+		      
+		      if (folder.isDirectory()) {
+		         File[] listOfFiles = folder.listFiles();
+		         if (listOfFiles.length < 1){
+		        	 log.info("There is no File inside Folder");
+		         }
+		         else {
+		        	 System.out.println("List of Files & Folder");
+		         }
+		         for (File file : listOfFiles) {
+		            if(!file.isDirectory() && file.getName().endsWith(".zip")){
+		            	
+		            	FILE_NAME=file.getName();
+		            	log.info("Found zip file with Name :"+file.getCanonicalPath().toString());
+		         } 
+		         }
+		      } else {
+		    	 log.info("There is no File at given path :" + FILE_PATH);
+		      }
+			//---READ Zip File from 
+		      file=new File(FILE_PATH+FILE_NAME);
+			log.info("DamAssetRenditionCreationPublishProcess file path ="+file.getPath());
+			log.info("before input stream");
+			inputStream=new FileInputStream(file);//open input stream
+			log.info("after input stream");
+			this.createDamAsset(inputStream, FILE_NAME, session, DAM_LOCATION, "application/zip", rr);//create asset
+			inputStream.close();//close the input stream
+			
+			log.info("myPayload to next step is : "+DAM_LOCATION+FILE_NAME);
+			workItem.getWorkflowData().getMetaDataMap().put("myPayload", DAM_LOCATION+FILE_NAME);
+			
+			
+			//delete the pdf from source location
+			if (file.delete()) {
+				log.info("File deleted successfully");
+			} else {
+				log.info("Failed to delete the file");
+			}
+			
+		} catch (LoginException | RepositoryException | IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+        
+        
+        
+        
+	}
+	
+	private void createDamAsset(InputStream is, String fileName,
+			javax.jcr.Session session, String damLocation, String fileType,
+			ResourceResolver resolver) throws RepositoryException,
+			LoginException {
+		log.info("inside createDamAsset method");
+		log.info("Dam Location " + damLocation);
+		
+		AssetManager assetManager = resolver.adaptTo(AssetManager.class);
+		assetManager.createAsset(damLocation + fileName, is, fileType, true);
+		session.save();
+		session.logout();
+
+	}
+}
+
+------------------------------------process 1 end--------------------------------
+
+-------------------------------------process 2 start ----------------------------
+
+package com.arche11.UnarchivalFlow;
+
+import com.day.cq.commons.jcr.JcrUtil;
+import com.day.cq.dam.api.Asset;
+import com.day.cq.dam.api.AssetManager;
+import com.day.cq.dam.api.Rendition;
+import com.day.cq.dam.commons.process.AbstractAssetWorkflowProcess;
+import com.day.cq.dam.commons.util.DamUtil;
+import com.day.cq.workflow.WorkflowException;
+import com.day.cq.workflow.WorkflowSession;
+import com.day.cq.workflow.exec.WorkItem;
+import com.day.cq.workflow.exec.WorkflowData;
+import com.day.cq.workflow.exec.WorkflowProcess;
+import com.day.cq.workflow.metadata.MetaDataMap;
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.math.BigInteger;
+import java.nio.charset.Charset;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import javax.jcr.Item;
+import javax.jcr.Node;
+import javax.jcr.RepositoryException;
+import javax.jcr.Session;
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.jackrabbit.util.Text;
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.apache.sling.commons.mime.MimeTypeService;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Activate;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.osgi.service.metatype.annotations.AttributeDefinition;
+import org.osgi.service.metatype.annotations.Designate;
+import org.osgi.service.metatype.annotations.ObjectClassDefinition;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.supercsv.cellprocessor.ift.CellProcessor;
+import org.supercsv.io.CsvMapReader;
+import org.supercsv.io.ICsvMapReader;
+import org.supercsv.prefs.CsvPreference;
+import org.apache.sling.commons.mime.MimeTypeService;
+
+@Component(
+		service=WorkflowProcess.class,
+        property={"process.label="+"My DAM Unarchiver Process", 
+        		   Constants.SERVICE_DESCRIPTION+"=This is unarchival Process workflow"}
+		)
+public class CustomUnarchiverProcess extends AbstractAssetWorkflowProcess
+{
+  protected static final Logger log = LoggerFactory.getLogger(CustomUnarchiverProcess.class);
+  protected static final int BUFFER = 2048;
+  protected static final String MIME_TYPE_ZIP = "application/zip";
+  protected static final String FILE_EXT_ZIP = ".zip";
+  
+  @Reference
+  ResourceResolverFactory rrf;
+  
+  ResourceResolver rr;
+  
+  @Reference
+  private MimeTypeService mimeTypeService;
+  
+  @Reference
+  CustomUnarchiverProcessConfigService unarchiveConfigService;
+  
+  public final void execute(WorkItem item, WorkflowSession wfSession, MetaDataMap args)
+    throws WorkflowException
+  {
+	  Map<String,Object> param=new HashMap<String,Object>();
+		param.put(ResourceResolverFactory.SUBSERVICE,"myWorkflowInvokeService");
+		try {
+			rr=rrf.getServiceResourceResolver(param);
+		} catch (LoginException e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+    Session session = rr.adaptTo(Session.class);
+    
+    String myZipFilePayload = item.getWorkflowData().getMetaDataMap().get("myPayload", java.lang.String.class);
+    
+    Asset asset = this.getAssetFromPayload(myZipFilePayload, rr);
+    if (null != asset)
+    {
+      String assetPath = asset.getPath();
+      if (!isZipFile(asset))
+      {
+        log.info("execute: ignoring asset [{}] as it is not a ZIP archive.", assetPath);
+        return;
+      }
+      Rendition original = asset.getOriginal();
+      if (null != original)
+      {
+        InputStream stream = original.getStream();
+        if (null != stream)
+        {
+          AssetManager assetManager = this.getAssetManager(rr);
+          if (null == assetManager) {
+            throw new WorkflowException("asset manager unavailable");
+          }
+          
+          UnarchiveConfigBean UnarchiveConfigBeanObj=new UnarchiveConfigBean();
+          UnarchiveConfigBeanObj.setMaxBytes(unarchiveConfigService.size_Limit());
+          UnarchiveConfigBeanObj.setMaxNumFiles(unarchiveConfigService.fileNumber_Limit());
+          UnarchiveConfigBeanObj.setMaxNumFilesPerDir(unarchiveConfigService.per_Directory_File_Number_Limit());
+          UnarchiveConfigBeanObj.setSaveThreshold(unarchiveConfigService.save_Threshold());
+          UnarchiveConfigBeanObj.setRemoveOriginal(unarchiveConfigService.removeOriginal());
+          UnarchiveConfigBeanObj.setSkipFileNamePatterns(unarchiveConfigService.Skip_File_Name_Pattern());
+          
+          UnarchiverContext context = new UnarchiverContext(session, assetManager, asset, args ,UnarchiveConfigBeanObj);
+     
+          item.getWorkflowData().getMetaDataMap().put("noretry", Boolean.valueOf(true));
+          
+          log.info("scan: scanning archive [{}] and verifying configured limits", assetPath);
+          scan(context);
+          
+          log.debug("execute: calling beforeExtract for [{}]", assetPath);
+          beforeExtract(context);
+          
+          boolean isExtractionSuccessful = false;
+          try
+          {
+            isExtractionSuccessful = extract(context,rr);
+          }
+          catch (IOException e)
+          {
+            log.error("execute: IO error while extracting archive [{}]: ", assetPath, e);
+          }
+          catch (RepositoryException e)
+          {
+            log.error("execute: repository error while extracting archive [{}]: ", assetPath, e);
+          }
+          finally
+          {
+            log.debug("execute: calling afterExtract for [{}] (extraction {})", assetPath, isExtractionSuccessful ? "successful" : "failed");
+            
+            afterExtract(context, isExtractionSuccessful);
+            IOUtils.closeQuietly(stream);
+          }
+        }
+        else
+        {
+          log.error("execute: cannot extract archive, asset [{}] in workflow [{}] doesn't have binary stream.", assetPath, item
+            .getId());
+        }
+      }
+      else
+      {
+        log.error("execute: cannot extract archive, asset [{}] in workflow [{}] doesn't have original file.", assetPath, item
+          .getId());
+      }
+    }
+    else
+    {
+      log.error("execute: cannot extract archive, asset [{}] in workflow [{}] does not exist.", item
+        .getWorkflowData().getPayload().toString(), item.getId());
+    }
+  }
+  
+  private boolean extract(UnarchiverContext context,ResourceResolver rr)
+    throws RepositoryException, IOException
+  {
+    Session session = context.getSession();
+    Asset asset = context.getAsset();
+    String assetPath = asset.getPath();
+    boolean isProcessingAllowed=true;
+    StringBuilder errorMsgStr=new StringBuilder();
+    List<MetadataCSVBean> finaliMetadataCsvList=new ArrayList<>();
+    
+    //---------creating zip asset zis for reading metadata
+    ZipInputStream zis = context.createZipInputStream();
+   
+    //---------creating zip asset zis for processing files
+    ZipInputStream assetZis =context.createZipInputStream();
+    try
+    {
+      log.info("extract: begin extraction of archive [{}] - update mode [{}]", assetPath, context
+        .getUpdateMode().name());
+      
+    // context.setRoot(getOrCreateRoot(context));
+      try
+      {
+        ZipEntry entry;
+        
+        log.info("before readCSVData");
+        Map<List<MetadataCSVBean>,List<String>> outputFinalMap=this.readCSVData(zis);
+        
+        log.info("After readCSVData");
+        Set<Map.Entry<List<MetadataCSVBean>,List<String>>> entrySet = outputFinalMap.entrySet();
+        
+        // Collection Iterator
+        Iterator<Entry<List<MetadataCSVBean>,List<String>>> iterator = entrySet.iterator();
+ 
+        while(iterator.hasNext()) {
+ 
+            Entry<List<MetadataCSVBean>,List<String>> entryList = iterator.next();
+ 
+            finaliMetadataCsvList=entryList.getKey();
+            
+            for(String errorMsg : entryList.getValue()) {
+                log.info("errorMsg :"+errorMsg);
+                errorMsgStr.append(errorMsg);
+            }
+            
+            if(null!=errorMsgStr && errorMsgStr.length()>0 && !errorMsgStr.equals("")){
+            	isProcessingAllowed=false;
+            }
+        }
+        
+        if(isProcessingAllowed){
+           
+        while (null != (entry = assetZis.getNextEntry()))
+        {
+          String name = entry.getName();
+          if (isExtractEntry(context, entry))
+          {
+            long numFiles = context.updateNumFiles();
+            
+            extractEntry(context, assetZis, entry,rr,finaliMetadataCsvList);
+            if (numFiles % context.getSaveThreshold() == 0L)
+            {
+              log.debug("extract: threshold of [{}] reached, saving....", Long.valueOf(context.getSaveThreshold()));
+              session.save();
+            }
+          }
+          else
+          {
+            log.info("extract: extraction of entry [{}] skipped for archive [{}]", name, assetPath);
+          }
+        }
+        }
+        else{
+        	log.info("Processing not allowed due to error message :"+errorMsgStr.toString());
+        }
+      }
+      catch (Exception e)
+      {
+        log.error("extract: error while extracting archive [{}]: ", assetPath, e);
+      }
+      finally
+      {
+        zis.closeEntry();
+        assetZis.closeEntry();
+      }
+      log.info("extract: extraction of archive [{}] successfully completed.", assetPath);
+      
+      return true;
+    }
+    finally
+    {
+      IOUtils.closeQuietly(zis);
+    }
+  }
+  
+  private long getFolderCount(HashMap<String, Long> folderMap, String zipFolder)
+  {
+    long count;
+    if (folderMap.containsKey(zipFolder))
+    {
+      count = ((Long)folderMap.get(zipFolder)).longValue();
+      folderMap.put(zipFolder, Long.valueOf(++count));
+    }
+    else
+    {
+      count = 1L;
+      folderMap.put(zipFolder, Long.valueOf(count));
+    }
+    return count;
+  }
+  
+  private String getSHA1(MessageDigest sha1)
+  {
+    return new BigInteger(1, sha1.digest()).toString(16);
+  }
+  
+  private static boolean isZipFile(Asset asset)
+  {
+    return ("application/zip".equals(asset.getMimeType())) || (asset.getName().endsWith(".zip"));
+  }
+  
+  protected void scan(UnarchiverContext context)
+    throws WorkflowException
+  {
+    Asset asset = context.getAsset();
+    HashMap<String, Long> folderMap = new HashMap();
+    String assetPath = asset.getPath();
+    
+    long maxBytes = context.getMaxBytes();
+    long maxNumFiles = context.getMaxNumFiles();
+    long maxNumFilesPerDir = context.getMaxNumFilesPerDirectory();
+    
+    log.info("scan: configured limits: max bytes [{}], max files [{}], max files per dir [" + maxNumFilesPerDir + "]", 
+      Long.valueOf(maxBytes), Long.valueOf(maxNumFiles));
+    
+    ZipInputStream zis = context.createZipInputStream();
+    try
+    {
+      long numBytes = 0L;
+      long numFiles = 0L;
+      ZipEntry entry;
+      while (null != (entry = zis.getNextEntry()))
+      {
+        EntryInfo info = context.getEntryInfo(entry);
+        String zipFolder = info.getParentPath();
+        if (isExtractEntry(context, entry))
+        {
+          long entryBytes = 0L;
+          
+          byte[] buffer = new byte['?'];
+          int size;
+          while ((size = zis.read(buffer, 0, buffer.length)) != -1) {
+            entryBytes += size;
+          }
+          entry.setSize(entryBytes);
+          numBytes += entryBytes;
+          if (numBytes > maxBytes)
+          {
+            log.error("scan: archive [{}] exceeds configured max bytes limit [{}]", assetPath, Long.valueOf(maxBytes));
+            throw new WorkflowException("Configured max number of bytes exceeded");
+          }
+          numFiles += 1L;
+          if (numFiles > maxNumFiles)
+          {
+            log.error("scan: archive [{}] exceeds max number of files limit [{}]", assetPath, Long.valueOf(maxNumFiles));
+            throw new WorkflowException("Configured max number of files limit exceeded");
+          }
+          long dirFileCount = getFolderCount(folderMap, zipFolder);
+          if (dirFileCount > maxNumFilesPerDir)
+          {
+            log.error("scan: archive [{}] exceeds max number of files/folders per directory limit [" + maxNumFilesPerDir + "] in directory [{}]", assetPath, zipFolder);
+            
+            throw new WorkflowException("Configured total number of files limit reached");
+          }
+          log.debug("scan: scanned entry [{}] - [{}] bytes - folder:[" + zipFolder + " - " + dirFileCount + " - " + maxNumFilesPerDir + "]", entry
+            .getName(), Long.valueOf(entry.getSize()));
+        }
+      }
+      context.setTotalNumFiles(numFiles);
+      context.setTotalNumBytes(numBytes);
+      
+      log.info("scan: scan of archive [{}] completed. archive is within configured limits.", assetPath);
+      log.info("scan: archive [{}] will result in [{}] extracted files with a total of [" + numBytes + "] bytes.", assetPath, 
+        Long.valueOf(numFiles));
+    }
+    catch (IOException e)
+    {
+      log.error("scan: IO error while scanning archive [{}]: ", assetPath, e);
+    }
+    finally
+    {
+      IOUtils.closeQuietly(zis);
+    }
+  }
+  
+  protected void extractEntry(UnarchiverContext context, ZipInputStream zis, ZipEntry entry,ResourceResolver rr, List<MetadataCSVBean> csvMetdataList)
+    throws Exception
+  {
+	 
+    Session session = context.getSession();
+   // Node root = context.getTargetRoot();
+    
+    EntryInfo info = context.getEntryInfo(entry);
+    String name = entry.getName();
+    String zipPath = info.getPath();
+    String fileName = info.getFileName();
+    //String fullPath = info.getTargetPath(root.getPath());
+    
+    //This map needs to fetch from felix console
+    
+    Map<String,String> libraryDamLocationMap=new HashMap<>();
+    
+	
+	libraryDamLocationMap.put("Memo From the Sub Advisors","/content/dam/Sharepoint/etf-multifactor-and-active");
+	libraryDamLocationMap.put("Morningstar Analyst Reports","/content/dam/Sharepoint/etf-multifactor-index-returns");
+	libraryDamLocationMap.put("ICG Weekly Insights","/content/dam/Sharepoint/etf-riskgenetix");
+	libraryDamLocationMap.put("Opportunity Playbooks","/content/dam/Sharepoint/f-shares-vs-active-mutual-funds");
+	libraryDamLocationMap.put("Fund Summaries","/content/dam/Sharepoint/i-shares-vs-passive-etfs");
+	libraryDamLocationMap.put("Multifactor Index Returns","/content/dam/Sharepoint/portfolio-characteristics");
+	
+	//Quarterly Active Share Report - added for testing new entry mapping in metadata CSV
+	
+	libraryDamLocationMap.put("Quarterly Active Share Report","/content/dam/Sharepoint/quarterly-active-share-report");
+	
+	log.info("libraryDamLocationMap size : "+libraryDamLocationMap.size());
+	
+	
+	Map<String,String> doclibraryMap=new HashMap<>();
+	for(MetadataCSVBean metadataCSVObj: csvMetdataList){
+		doclibraryMap.put(metadataCSVObj.getFile(), metadataCSVObj.getLibrary());
+	log.info("List Details ; File :"+metadataCSVObj.getFile() +" and LibraryName :"+metadataCSVObj.getLibrary() +" and tag name : "+metadataCSVObj.getWebId());
+	}
+	
+	log.info("doclibraryMap size : "+doclibraryMap.size());
+	
+	log.info("filename : "+fileName +"and the corresponding doclibraryMap value is :  "+doclibraryMap.get(fileName));
+	
+	if(!fileName.endsWith(".csv")){
+	  String fullPath =libraryDamLocationMap.get(doclibraryMap.get(fileName));
+	  log.info("fullPath details : "+fullPath);
+	 context.setRoot(getOrCreateRoot(context,fullPath));
+	}
+	
+	Node root = context.getTargetRoot();
+	
+	String fullPathWithFileName = libraryDamLocationMap.get(doclibraryMap.get(fileName))+"/"+fileName;
+	
+    log.debug("1.ZipPath : "+zipPath);
+    
+    log.debug("2.fullPath fetched from map : "+fullPathWithFileName);
+    
+    log.info("3.name : "+name);
+    
+    log.info("4.fileName : "+fileName);
+    
+    log.debug("extractEntry: extracting entry [{}] in archive [{}]", entry.getName(), context.getAsset().getPath());
+    
+    
+    if (entry.isDirectory())
+    {
+      if (!root.hasNode(zipPath))
+      {
+        Node node = JcrUtil.createPath(root, zipPath, false, "sling:OrderedFolder", "sling:OrderedFolder", session, false);
+        
+        log.info("extractEntry: created directory [{}] from entry [{}]", node.getPath(), name);
+      }
+      else
+      {
+        log.debug("extractEntry: directory [{}] already exists, skipping entry [{}]", fullPathWithFileName, name);
+      }
+    }
+    else
+    {
+      File tempFile = File.createTempFile("unarchiver-file-" + System.currentTimeMillis(), null);
+      log.debug("extractEntry: created temporary file at [{}]", tempFile.getPath());
+      FileOutputStream fos = null;
+      FileInputStream fis = null;
+      try
+      {
+        long numBytes = 0L;
+        byte[] buffer = new byte['?'];
+        MessageDigest sha1 = MessageDigest.getInstance("SHA1");
+        
+        fos = new FileOutputStream(tempFile);
+        int size;
+        while ((size = zis.read(buffer, 0, buffer.length)) != -1)
+        {
+          fos.write(buffer, 0, size);
+          sha1.update(buffer, 0, size);
+          numBytes += size;
+        }
+        IOUtils.closeQuietly(fos);
+        
+        context.updateNumBytes(numBytes);
+        if (!isMatchSkipFileNamePatterns(context, fileName))
+        {
+          String zipSha1 = getSHA1(sha1);
+          log.debug("extractEntry: got SHA-1 [{}] for entry [{}]", zipSha1, name);
+          
+          Resource resource = rr.getResource(fullPathWithFileName);
+          Asset target = null;
+          //Scenario -1 =====> asset already present scenario
+          if ((null != resource) && (null != (target = (Asset)resource.adaptTo(Asset.class))))
+          {
+            String assetSha1 = target.getMetadataValue("dam:sha1");
+            if (StringUtils.equals(assetSha1, zipSha1))
+            {
+              log.info("extractEntry: entry [{}] exists as asset [{}] with identical SHA-1, skipping.", name, target.getPath());
+              return;
+            }
+          }
+          fis = new FileInputStream(tempFile);
+          String mimeType = this.mimeTypeService.getMimeType(fileName);
+         
+          if (null != target)
+          {
+            Asset newAsset = target.addRendition("original", fis, mimeType).getAsset();
+            log.info("extractEntry: updated existing asset [{}] from entry [{}]", newAsset.getPath(), name);
+          }
+          else
+          {
+            if (null != resource)
+            {
+              log.error("extractEntry: cannot extract entry [{}], blocking resource at [{}]", name, resource
+                .getPath());
+              throw new WorkflowException("Cannot extract entry, blocking resource.");
+            }
+            Asset newAsset = context.getAssetManager().createAsset(fullPathWithFileName, fis, mimeType, true);
+            if (null != newAsset)
+            {
+              log.info("extractEntry: created new asset [{}] from entry [{}]", newAsset.getPath(), name);
+            }
+            else
+            {
+              log.error("extractEntry: asset manager couldn't create asset for entry [{}]", name);
+              throw new WorkflowException("Asset manager couldn't create asset for entry " + name);
+            }
+          }
+        }
+      }
+      finally
+      {
+        IOUtils.closeQuietly(fos);
+        IOUtils.closeQuietly(fis);
+        tempFile.delete();
+        log.debug("extractEntry: deleted temporary file at [{}]", tempFile.getPath());
+      }
+    }
+  }
+  
+  private boolean isMatchSkipFileNamePatterns(UnarchiverContext context, String fileName)
+  {
+    String[] patterns = context.getSkipFileNamePatterns().split(":");
+    for (String pattern : patterns) {
+      if (fileName.matches(pattern)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  protected void afterExtract(UnarchiverContext context, boolean isExtractionSuccessful)
+  {
+    String assetPath = context.getAsset().getPath();
+    if (!isExtractionSuccessful)
+    {
+      log.info("afterExtract: not removing original archive [{}] as preceding extraction failed.", assetPath);
+      return;
+    }
+    if (context.isRemoveOriginal())
+    {
+      Session session = context.getSession();
+      
+      log.debug("afterExtract: removing original archive [{}]", assetPath);
+      try
+      {
+        session.removeItem(assetPath);
+        
+        log.info("afterExtract: original archive [{}] removed", assetPath);
+      }
+      catch (RepositoryException e)
+      {
+        log.error("afterExtract: could not remove asset [{}]: ", assetPath, e);
+      }
+    }
+    else
+    {
+      log.info("afterExtract: not removing original archive [{}] as per configuration.", assetPath);
+    }
+  }
+  
+  protected boolean isExtractEntry(UnarchiverContext context, ZipEntry entry)
+  {
+    return true;
+  }
+  
+  protected void beforeExtract(UnarchiverContext context) {}
+  
+  protected Node getOrCreateRoot(UnarchiverContext context,String damLocationPath)
+    throws RepositoryException
+  {
+   
+	  Session session=context.getSession();
+   /* Asset asset = context.getAsset();
+    String assetPath = asset.getPath();*/
+    
+    //String rootHint = Text.getRelativeParent(asset.getPath(), 1) + "/" + StringUtils.substringBeforeLast(asset.getName(), ".");
+    //Node root;
+    /*if (CustomUnarchiverProcess.UnarchiverContext.UPDATE_MODE.OVERWRITE == context.getUpdateMode())
+    {
+      if (session.itemExists(rootHint))
+      {
+        log.debug("extract: update mode is [{}], removing existing folder [{}]...", context
+          .getUpdateMode().name(), rootHint);
+        session.getItem(rootHint).remove();
+        log.info("extract: target folder [{}] removed.", rootHint);
+      }
+         Node root = JcrUtil.createPath(rootHint, "sling:OrderedFolder", session);
+         log.debug("extract: created extraction folder at [{}] for [{}]", root.getPath(), assetPath);
+         return root;
+      
+    }
+    else if (CustomUnarchiverProcess.UnarchiverContext.UPDATE_MODE.UPDATE == context.getUpdateMode())
+    {
+      if (session.itemExists(rootHint))
+      {
+    	  Node root = (Node)session.getItem(rootHint);
+    	  log.debug("extract: update mode is [{}], using existing folder [{}]...", context
+    	          .getUpdateMode().name(), rootHint);
+    	  return root;
+       
+      }
+      else
+      {
+    	  Node root = JcrUtil.createPath(rootHint, "sling:OrderedFolder", session);
+    	  log.debug("extract: update mode is [{}], but destination doesn't exit, created [{}]", context
+    	          .getUpdateMode().name(), rootHint);
+    	  return root;
+       
+      }
+    }
+    else
+    {*/
+   if(session!=null){
+	   log.info("current  damLocationPath is : "+ damLocationPath);
+      if (session.itemExists(damLocationPath))
+      {
+    	 
+    	  Node root = (Node)session.getItem(damLocationPath);
+    	  log.debug("extract: DAM Location PAth : ", damLocationPath);
+    	  return root;
+       
+      }
+      else
+      {
+    	  log.debug("creating unique folder...");
+          Node root = JcrUtil.createPath(damLocationPath, "sling:OrderedFolder", session);
+          log.debug("extract: created extraction folder at [{}] for [{}]", root.getPath(), damLocationPath);
+          return root;
+      }
+   }else{
+	   log.info("Session is NULL");
+	   return null;
+   }
+
+    /*}*/
+  }
+  
+  protected static class UnarchiverContext
+  {
+    protected static final String ARG_NAME_DISABLE_EXTRACT = "disableExtract";
+    protected static final String ARG_NAME_REMOVE_ORIGINAL = "removeOriginal";
+    protected static final String ARG_NAME_MAX_BYTES = "maxBytes";
+    protected static final String ARG_NAME_MAX_NUM_ITEMS = "maxNumItems";
+    protected static final String ARG_NAME_MAX_NUM_ITEMS_PER_DIR = "maxNumItemsPerDir";
+    protected static final String ARG_NAME_SAVE_THRESHOLD = "saveThreshold";
+    protected static final String ARG_NAME_UPDATE_MODE = "updateMode";
+    protected static final String ARG_NAME_SKIP_FILE_NAME_PATTERNS = "skipFileNamePatterns";
+    protected static final long DEFAULT_MAX_BYTES = 104857600L;
+    protected static final long DEFAULT_MAX_NUM_ITEMS = 10000L;
+    protected static final long DEFAULT_MAX_NUM_ITEMS_PER_DIR = 100L;
+    protected static final long DEFAULT_SAVE_THRESHOLD = 1024L;
+    private boolean removeOriginal;
+    private  long maxBytes;
+    private  long maxNumFiles;
+    private  long maxNumFilesPerDir;
+    private  long saveThreshold;
+    private  Session session;
+    private final AssetManager assetManager;
+    private final Asset asset;
+    private Node root;
+    private UPDATE_MODE updateMode;
+    
+    protected static enum UPDATE_MODE
+    {
+      OVERWRITE,  UPDATE,  NEW;
+      
+      private UPDATE_MODE() {}
+    }
+    
+   
+    
+    private long numFiles = 0L;
+    private long numBytes = 0L;
+    private long totalNumFiles;
+    private long totalNumBytes;
+    private String skipFileNamePatterns = "";
+    
+    private UnarchiverContext(Session session, AssetManager assetManager, Asset asset, MetaDataMap args ,UnarchiveConfigBean unarchiveConfigBeanObj)
+    {
+      this.session = session;
+      this.assetManager = assetManager;
+      this.asset = asset;
+      
+      this.updateMode = UPDATE_MODE.NEW;
+      this.maxBytes = unarchiveConfigBeanObj.getMaxBytes();
+      this.maxNumFiles = unarchiveConfigBeanObj.getMaxNumFiles();
+      this.maxNumFilesPerDir = unarchiveConfigBeanObj.getMaxNumFilesPerDir();
+      this.saveThreshold = unarchiveConfigBeanObj.getSaveThreshold();
+      this.skipFileNamePatterns = unarchiveConfigBeanObj.getSkipFileNamePatterns();
+      
+      log.info("maxBytes : "+maxBytes);
+      log.info("maxNumFiles : "+maxNumFiles);
+      log.info("maxNumFilesPerDir : "+maxNumFilesPerDir);
+      log.info("saveThreshold : "+saveThreshold);
+      log.info("skipFileNamePatterns : "+skipFileNamePatterns);
+      
+      //commented intentionally by swamy
+  /*    try
+      {
+        String updateModeStr = ((String)args.get("updateMode", "new")).toUpperCase();
+        this.updateMode = UPDATE_MODE.valueOf(updateModeStr);
+      }
+      catch (IllegalArgumentException e)
+      {
+        this.updateMode = UPDATE_MODE.NEW;
+      }*/
+      
+    }
+    
+    //Retrive from Config console
+   
+    
+    public Asset getAsset()
+    {
+      return this.asset;
+    }
+    
+    public AssetManager getAssetManager()
+    {
+      return this.assetManager;
+    }
+    
+    public CustomUnarchiverProcess.EntryInfo getEntryInfo(ZipEntry entry)
+    {
+      return new CustomUnarchiverProcess.EntryInfo(entry);
+    }
+    
+    public long getSaveThreshold()
+    {
+      return this.saveThreshold;
+    }
+    
+    public Node getTargetRoot()
+    {
+      return this.root;
+    }
+    
+    public long getNumFiles()
+    {
+      return this.numFiles;
+    }
+    
+    public long getNumBytes()
+    {
+      return this.numBytes;
+    }
+    
+    public Session getSession()
+    {
+      return this.session;
+    }
+    
+    protected long getMaxBytes()
+    {
+      return this.maxBytes;
+    }
+    
+    protected long getMaxNumFiles()
+    {
+      return this.maxNumFiles;
+    }
+    
+    public long getMaxNumFilesPerDirectory()
+    {
+      return this.maxNumFilesPerDir;
+    }
+    
+    public long getTotalNumFiles()
+    {
+      return this.totalNumFiles;
+    }
+    
+    public long getTotalNumBytes()
+    {
+      return this.totalNumBytes;
+    }
+    
+    public UPDATE_MODE getUpdateMode()
+    {
+      return this.updateMode;
+    }
+    
+ /*   protected boolean isDisableExtraction()
+    {
+      return this.disableExtraction;
+    }*/
+    
+    protected boolean isRemoveOriginal()
+    {
+      return this.removeOriginal;
+    }
+    
+    protected ZipInputStream createZipInputStream()
+    {
+      return new ZipInputStream(new BufferedInputStream(this.asset.getOriginal().getStream()), Charset.forName("Cp437"));
+    }
+    
+    private void setRoot(Node root)
+    {
+      this.root = root;
+    }
+    
+    private long updateNumBytes(long numBytes)
+    {
+      this.numBytes += numBytes;
+      return this.numBytes;
+    }
+    
+    private long updateNumFiles()
+    {
+      this.numFiles += 1L;
+      return this.numFiles;
+    }
+    
+    private void setTotalNumFiles(long totalNumFiles)
+    {
+      this.totalNumFiles = totalNumFiles;
+    }
+    
+    private void setTotalNumBytes(long totalNumBytes)
+    {
+      this.totalNumBytes = totalNumBytes;
+    }
+    
+    protected String getSkipFileNamePatterns()
+    {
+      return this.skipFileNamePatterns;
+    }
+  }
+  
+  protected static class EntryInfo
+  {
+    private static final String ROOT_FOLDER = "./";
+    private final ZipEntry entry;
+    private final String path;
+    private final String fileName;
+    private final String parentPath;
+    
+    private EntryInfo(ZipEntry entry)
+    {
+      this.entry = entry;
+      String name = entry.getName();
+      this.path = (name.endsWith("/") ? StringUtils.substring(name, 0, name.length() - 1) : name);
+      this.fileName = Text.getName(entry.getName());
+      this.parentPath = Text.getRelativeParent(this.path, 1);
+    }
+    
+    protected ZipEntry getEntry()
+    {
+      return this.entry;
+    }
+    
+    protected String getFileName()
+    {
+      return this.fileName;
+    }
+    
+    protected String getParentPath()
+    {
+      return StringUtils.isBlank(this.parentPath) ? "./" : this.parentPath;
+    }
+    
+    protected String getPath()
+    {
+      return this.path;
+    }
+    
+    protected String getTargetPath(String rootPath)
+    {
+      return rootPath + "/" + ("./".equals(getParentPath()) ? "" : new StringBuilder().append(getParentPath()).append("/").toString()) + Text.escapeIllegalJcrChars(getFileName());
+    }
+  }
+  		  
+		/*  protected ResourceResolver getResourceResolver()
+		  {
+			  Map<String,Object> param=new HashMap<String,Object>();
+				param.put(ResourceResolverFactory.SUBSERVICE,"myWorkflowInvokeService");
+				try {
+					rr=rrf.getServiceResourceResolver(param);
+					return rr;
+				} catch (LoginException e1) {
+					// TODO Auto-generated catch block
+					e1.printStackTrace();
+				}
+				return null;
+		  }*/
+		  
+		  protected Asset getAssetFromPayload(/*WorkItem item,*/ String payloadPath , ResourceResolver rr)
+		  {
+		    Asset asset = null;
+		   /* if (item.getWorkflowData().getPayloadType().equals("JCR_PATH"))
+		    {*/
+		      //String path = item.getWorkflowData().getPayload().toString();
+		      Resource resource = rr.getResource(payloadPath);
+		      if (null != resource) {
+		        asset = DamUtil.resolveToAsset(resource);
+		      } else {
+		        log.error("getAssetFromPaylod: asset in payload [{}] of workflow  does not exist." + payloadPath);
+		      }
+		    /*}*/
+		    return asset;
+		  }
+		  
+		  protected AssetManager getAssetManager(ResourceResolver rr)
+		  {
+		    return (AssetManager)rr.adaptTo(AssetManager.class);
+		  }
+		  
+		 //-------------------read csv logic start---------------------------------------------------------------------------
+			
+			public  Map<List<MetadataCSVBean>,List<String>> readCSVData(ZipInputStream zis){
+				
+				  List<Map<String, Object>> csvRowDataList = null;
+			      FileOutputStream fos = null;
+			      FileInputStream fis = null;
+			      File tempFile =null;
+			      
+			      
+			      String file=null;
+			      String fileName=null;
+			      String libraryName=null;
+			      String fundName=null;
+			      String ticker=null;
+			      String webId=null;
+			      String subAdvisor=null;
+			      String year=null;
+			      String quarter=null;
+			      String modified=null;
+			     
+			      MetadataCSVBean metadataCSVBeanObj=null;
+			      List<MetadataCSVBean> metadataCSVObjList=new ArrayList<>();
+			      Map<List<MetadataCSVBean>,List<String>> finalMap=new HashMap<>();
+			      
+			      List<String> errorMsgs=new ArrayList<>();
+			      
+			      Map<String,String> fileNameLibraryMap=new HashMap<>();
+			      
+			      Set<String> LibraryList=new HashSet<>();
+			      try
+				      {
+			    	  
+			    	  if(this.isCSVFile(zis)){
+			    		  log.info("Inside if isCSVFile(zis) loop");
+				    	tempFile = File.createTempFile("unarchiver-file-" + System.currentTimeMillis(), null);
+				    	log.debug("extractEntry: created temporary file at [{}]", tempFile.getPath());
+				        long numBytes = 0L;
+				        byte[] buffer = new byte['?'];
+				        MessageDigest sha1 = MessageDigest.getInstance("SHA1");
+				        
+				        fos = new FileOutputStream(tempFile);
+				        int size;
+				        while ((size = zis.read(buffer, 0, buffer.length)) != -1)
+				        {
+				          fos.write(buffer, 0, size);
+				          sha1.update(buffer, 0, size);
+				          numBytes += size;
+				        }
+				        IOUtils.closeQuietly(fos);
+				        
+				        fis = new FileInputStream(tempFile);
+				        InputStreamReader inputStreamReader = new InputStreamReader(fis);
+				        
+				        csvRowDataList = new ArrayList<Map<String, Object>>();
+				        csvRowDataList=this.readCSVRows(inputStreamReader);
+				        int i=0;
+				        if (null != csvRowDataList && !csvRowDataList.isEmpty()) {
+							log.info("csvRowDataList is not empty");
+							// Populate funds from csv
+							for (final Map<String, Object> rowDataMap : csvRowDataList) {
+		                             i++;
+								//log.info("Swamy your final map entry :"+ i +"=" + rowDataMap);
+		                             metadataCSVBeanObj=new MetadataCSVBean();
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("File"))) {
+		                            	 file=rowDataMap.get("File").toString();
+		                            	 metadataCSVBeanObj.setFile(file);
+		     						}
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("FileName"))) {
+		                            	 fileName=rowDataMap.get("FileName").toString();
+		     							metadataCSVBeanObj.setFileName(fileName);
+		     						}
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("Library"))) {
+		                            	 libraryName=rowDataMap.get("Library").toString();
+		     							metadataCSVBeanObj.setLibrary(libraryName);
+		     						}
+		     						
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("FundName"))) {
+		                            	 fundName=rowDataMap.get("FundName").toString();
+		                            	 metadataCSVBeanObj.setFundName(fundName);
+		     						}
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("Ticker"))) {
+		                            	 ticker=rowDataMap.get("Ticker").toString();
+		                            	 metadataCSVBeanObj.setTicker(ticker);
+		     						}
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("WebID"))) {
+		                            	 webId=rowDataMap.get("WebID").toString();
+		                            	 metadataCSVBeanObj.setWebId(webId);
+		     						}
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("SubAdvisor"))) {
+		                            	 subAdvisor=rowDataMap.get("SubAdvisor").toString();
+		                            	 metadataCSVBeanObj.setSubAdvisor(subAdvisor);
+		     						}
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("Year"))) {
+		                            	 year=rowDataMap.get("Year").toString();
+		                            	 metadataCSVBeanObj.setYear(year);
+		     						}
+		                             if (StringUtils.isNotEmpty((String) rowDataMap
+		     								.get("Quarter"))) {
+		                            	 quarter=rowDataMap.get("Quarter").toString();
+		                            	 metadataCSVBeanObj.setQuarter(quarter);
+		     						}
+								if (StringUtils.isNotEmpty((String) rowDataMap
+										.get("Modified"))) {
+									modified=rowDataMap.get("Modified").toString();
+									metadataCSVBeanObj.setModified(modified);
+								}
+								metadataCSVObjList.add(metadataCSVBeanObj);
+								
+							}
+							
+							//System.out.println("List Size is :"+metadataCSVObjList.size());
+							
+							/*for(MetadataCSVBean metadataCSVObj: metadataCSVObjList){
+								fileNameLibraryMap.put(metadataCSVObj.getFile(), metadataCSVObj.getLibrary());
+							log.info("List Details ; File :"+metadataCSVObj.getFile() +" and LibraryName :"+metadataCSVObj.getLibrary() +" and tag name : "+metadataCSVObj.getWebId());
+							}*/
+							
+							//log.info("Constructed map is"+fileNameLibraryMap);
+							
+						}
+			    	  }
+			    	  else{
+			    		  log.info("Not a CSV file");
+			    		  errorMsgs.add("NO CSV file found inside Zip file");
+			    	  }
+			    	  finalMap.put(metadataCSVObjList, errorMsgs);
+			    	  
+				} catch (IOException e) {
+					
+					e.printStackTrace();
+				} catch (NoSuchAlgorithmException e) {
+				
+					e.printStackTrace();
+				}
+			      finally
+				      {
+				        IOUtils.closeQuietly(fos);
+				        IOUtils.closeQuietly(fis);
+				        if(null!=tempFile && tempFile.exists()){
+				        tempFile.delete();
+				        }
+				       //log.debug("extractEntry: deleted temporary file at [{}]", tempFile.getPath());
+				      }
+			      return finalMap;
+			}
+			
+			
+			public List<Map<String, Object>> readCSVRows(InputStreamReader reader) {
+
+				List<Map<String, Object>> csvRowsList = new ArrayList<Map<String, Object>>();
+				ICsvMapReader mapReader = null;
+				try {
+					mapReader = new CsvMapReader(reader,
+							CsvPreference.STANDARD_PREFERENCE);
+
+					// the header columns are used as the keys to the Map
+					final String[] header = mapReader.getHeader(true);
+					log.info("readCSVRows after processing cell");
+					Map<String, Object> rowMetaDataMap;
+					CellProcessor[] migrationProcessor = getMigrationProcessor(header.length);
+					while ((rowMetaDataMap = mapReader.read(header, migrationProcessor)) != null) {
+
+						csvRowsList.add(rowMetaDataMap);
+					}
+				} catch (Exception exception) {
+					log.info("readCSVRows Exception occurred : "+ exception);
+				} finally {
+					if (mapReader != null) {
+						try {
+							mapReader.close();
+						} catch (IOException ioException) {
+							log.info("readCSVRows Exception occurred : "+ ioException);
+						}
+					}
+				}
+				return csvRowsList;
+			}
+			
+			private static CellProcessor[] getMigrationProcessor(int colCount) {
+
+				final CellProcessor[] migrationProcessors = new CellProcessor[colCount];
+				for (int i = 0; i < migrationProcessors.length; i++) {
+					migrationProcessors[i] = null;
+				}
+				return migrationProcessors;
+			}
+			
+			
+			public boolean isCSVFile(ZipInputStream zis){
+				 ZipEntry entry;
+				 boolean CSVFlag=false;
+			        try {
+						while (null != (entry = zis.getNextEntry())){
+							String csvFileName=Text.getName(entry.getName());
+							if(checkForCSVFile(csvFileName)){
+								CSVFlag=true;
+								break;
+							}
+						}
+					} catch (IOException e) {
+						e.printStackTrace();
+					}
+			        return CSVFlag;
+			}
+			
+			 public static  boolean checkForCSVFile(String fileName)
+			  {
+			      if (null!=fileName && fileName.length()>0 && fileName.contains(".csv")) {
+			        return true;
+			      }
+			    
+			    return false;
+			  }
+
+		  
+}
+
+----------------------------------pROCESS 2 END-----------------------------------------------
+
+-----------------------------BEAN------------------------
+package com.arche11.UnarchivalFlow;
+
+import java.util.Date;
+import java.util.List;
+
+public class MetadataCSVBean {
+
+	private String file;
+	
+	private String fileName;
+	
+	private String library;
+	
+	private String fundName;
+	
+	private String ticker;
+	
+	private String webId;
+	
+	private String subAdvisor;
+	
+	private String quarter;
+	
+	private String year;
+	
+	private String Modified;
+	
+	private List<String> errorMessageList;
+
+	public String getFile() {
+		return file;
+	}
+
+	public void setFile(String file) {
+		this.file = file;
+	}
+
+	public String getFileName() {
+		return fileName;
+	}
+
+	public void setFileName(String fileName) {
+		this.fileName = fileName;
+	}
+
+	public String getLibrary() {
+		return library;
+	}
+
+	public void setLibrary(String library) {
+		this.library = library;
+	}
+
+	public String getFundName() {
+		return fundName;
+	}
+
+	public void setFundName(String fundName) {
+		this.fundName = fundName;
+	}
+
+	public String getTicker() {
+		return ticker;
+	}
+
+	public void setTicker(String ticker) {
+		this.ticker = ticker;
+	}
+
+	public String getWebId() {
+		return webId;
+	}
+
+	public void setWebId(String webId) {
+		this.webId = webId;
+	}
+
+	public String getSubAdvisor() {
+		return subAdvisor;
+	}
+
+	public void setSubAdvisor(String subAdvisor) {
+		this.subAdvisor = subAdvisor;
+	}
+
+	public String getQuarter() {
+		return quarter;
+	}
+
+	public void setQuarter(String quarter) {
+		this.quarter = quarter;
+	}
+
+	public String getYear() {
+		return year;
+	}
+
+	public void setYear(String year) {
+		this.year = year;
+	}
+
+	public String getModified() {
+		return Modified;
+	}
+
+	public void setModified(String modified) {
+		Modified = modified;
+	}
+
+	public List<String> getErrorMessageList() {
+		return errorMessageList;
+	}
+
+	public void setErrorMessageList(List<String> errorMessageList) {
+		this.errorMessageList = errorMessageList;
+	}
+
+	
+	
+	
+	
+}
+-------------------------------------------bean object end------------------------------------------------------------
+
+----------------------------------------unarchive config bean-------------------------------------
+
+package com.arche11.UnarchivalFlow;
+
+public class UnarchiveConfigBean {
+
+	private boolean removeOriginal;
+    private  long maxBytes;
+    private  long maxNumFiles;
+    private  long maxNumFilesPerDir;
+    private  long saveThreshold;
+    private String skipFileNamePatterns = "";
+    
+    
+	public boolean isRemoveOriginal() {
+		return removeOriginal;
+	}
+	public void setRemoveOriginal(boolean removeOriginal) {
+		this.removeOriginal = removeOriginal;
+	}
+	public long getMaxBytes() {
+		return maxBytes;
+	}
+	public void setMaxBytes(long maxBytes) {
+		this.maxBytes = maxBytes;
+	}
+	public long getMaxNumFiles() {
+		return maxNumFiles;
+	}
+	public void setMaxNumFiles(long maxNumFiles) {
+		this.maxNumFiles = maxNumFiles;
+	}
+	public long getMaxNumFilesPerDir() {
+		return maxNumFilesPerDir;
+	}
+	public void setMaxNumFilesPerDir(long maxNumFilesPerDir) {
+		this.maxNumFilesPerDir = maxNumFilesPerDir;
+	}
+	public long getSaveThreshold() {
+		return saveThreshold;
+	}
+	public void setSaveThreshold(long saveThreshold) {
+		this.saveThreshold = saveThreshold;
+	}
+	public String getSkipFileNamePatterns() {
+		return skipFileNamePatterns;
+	}
+	public void setSkipFileNamePatterns(String skipFileNamePatterns) {
+		this.skipFileNamePatterns = skipFileNamePatterns;
+	}
+	
+}
+-----------------------------------Unarchive config bean end-----------------------------------------------
+
+
+-------------------------------------------ReadCSVFile Data------------------------------------------------
+
+package com.arche11.UnarchivalFlow;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.Map.Entry;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+
+import org.apache.commons.io.IOUtils;
+import org.apache.commons.lang.StringUtils;
+import org.apache.jackrabbit.util.Text;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.supercsv.cellprocessor.ift.CellProcessor;
+import org.supercsv.io.CsvMapReader;
+import org.supercsv.io.ICsvMapReader;
+import org.supercsv.prefs.CsvPreference;
+
+public class ReadCSVFileData {
+
+	//private static Logger log=LoggerFactory.getLogger(ReadCSVFileData.class);
+	
+	public static  Map<List<MetadataCSVBean>,List<String>> readCSVData(ZipInputStream zis){
+		
+		  List<Map<String, Object>> csvRowDataList = null;
+	      FileOutputStream fos = null;
+	      FileInputStream fis = null;
+	      File tempFile =null;
+	      
+	      
+	      String file=null;
+	      String fileName=null;
+	      String libraryName=null;
+	      String fundName=null;
+	      String ticker=null;
+	      String webId=null;
+	      String subAdvisor=null;
+	      String year=null;
+	      String quarter=null;
+	      String modified=null;
+	     
+	      MetadataCSVBean metadataCSVBeanObj=null;
+	      List<MetadataCSVBean> metadataCSVObjList=new ArrayList<>();
+	      Map<List<MetadataCSVBean>,List<String>> finalMap=new HashMap<>();
+	      
+	      List<String> errorMsgs=new ArrayList<>();
+	      
+	      Map<String,String> fileNameLibraryMap=new HashMap<>();
+	      
+	      Set<String> LibraryList=new HashSet<>();
+	      try
+		      {
+	    	  
+	    	  if(ReadCSVFileData.isCSVFile(zis)){
+	    		 // log.info("Inside if isCSVFile(zis) loop");
+		    	tempFile = File.createTempFile("unarchiver-file-" + System.currentTimeMillis(), null);
+		    	//log.debug("extractEntry: created temporary file at [{}]", tempFile.getPath());
+		        long numBytes = 0L;
+		        byte[] buffer = new byte['?'];
+		        MessageDigest sha1 = MessageDigest.getInstance("SHA1");
+		        
+		        fos = new FileOutputStream(tempFile);
+		        int size;
+		        while ((size = zis.read(buffer, 0, buffer.length)) != -1)
+		        {
+		          fos.write(buffer, 0, size);
+		          sha1.update(buffer, 0, size);
+		          numBytes += size;
+		        }
+		        IOUtils.closeQuietly(fos);
+		        
+		        fis = new FileInputStream(tempFile);
+		        InputStreamReader inputStreamReader = new InputStreamReader(fis);
+		        
+		        csvRowDataList = new ArrayList<Map<String, Object>>();
+		        csvRowDataList=ReadCSVFileData.readCSVRows(inputStreamReader);
+		        int i=0;
+		        if (null != csvRowDataList && !csvRowDataList.isEmpty()) {
+					//log.info("csvRowDataList is not empty");
+					// Populate funds from csv
+					for (final Map<String, Object> rowDataMap : csvRowDataList) {
+                             i++;
+						//log.info("Swamy your final map entry :"+ i +"=" + rowDataMap);
+                             metadataCSVBeanObj=new MetadataCSVBean();
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("File"))) {
+                            	 file=rowDataMap.get("File").toString();
+                            	 metadataCSVBeanObj.setFile(file);
+     						}
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("FileName"))) {
+                            	 fileName=rowDataMap.get("FileName").toString();
+     							metadataCSVBeanObj.setFileName(fileName);
+     						}
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("Library"))) {
+                            	 libraryName=rowDataMap.get("Library").toString();
+     							metadataCSVBeanObj.setLibrary(libraryName);
+     						}
+     						
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("FundName"))) {
+                            	 fundName=rowDataMap.get("FundName").toString();
+                            	 metadataCSVBeanObj.setFundName(fundName);
+     						}
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("Ticker"))) {
+                            	 ticker=rowDataMap.get("Ticker").toString();
+                            	 metadataCSVBeanObj.setTicker(ticker);
+     						}
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("WebID"))) {
+                            	 webId=rowDataMap.get("WebID").toString();
+                            	 metadataCSVBeanObj.setWebId(webId);
+     						}
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("SubAdvisor"))) {
+                            	 subAdvisor=rowDataMap.get("SubAdvisor").toString();
+                            	 metadataCSVBeanObj.setSubAdvisor(subAdvisor);
+     						}
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("Year"))) {
+                            	 year=rowDataMap.get("Year").toString();
+                            	 metadataCSVBeanObj.setYear(year);
+     						}
+                             if (StringUtils.isNotEmpty((String) rowDataMap
+     								.get("Quarter"))) {
+                            	 quarter=rowDataMap.get("Quarter").toString();
+                            	 metadataCSVBeanObj.setQuarter(quarter);
+     						}
+						if (StringUtils.isNotEmpty((String) rowDataMap
+								.get("Modified"))) {
+							modified=rowDataMap.get("Modified").toString();
+							metadataCSVBeanObj.setModified(modified);
+						}
+						metadataCSVObjList.add(metadataCSVBeanObj);
+						
+					}
+					
+					System.out.println("List Size is :"+metadataCSVObjList.size());
+					
+					for(MetadataCSVBean metadataCSVObj: metadataCSVObjList){
+						fileNameLibraryMap.put(metadataCSVObj.getFile(), metadataCSVObj.getLibrary());
+					//log.info("List Details ; File :"+metadataCSVObj.getFile() +" and LibraryName :"+metadataCSVObj.getLibrary() +" and tag name : "+metadataCSVObj.getWebId());
+					}
+					
+					//log.info("Constructed map is"+fileNameLibraryMap);
+					
+				}
+	    	  }
+	    	  else{
+	    		 // log.info("Not a CSV file");
+	    		  System.out.println("NO CSV file found inside Zip file");
+	    		  errorMsgs.add("NO CSV file found inside Zip file");
+	    	  }
+	    	  finalMap.put(metadataCSVObjList, errorMsgs);
+	    	  
+		} catch (IOException e) {
+			
+			e.printStackTrace();
+		} catch (NoSuchAlgorithmException e) {
+		
+			e.printStackTrace();
+		}
+	      finally
+		      {
+		        IOUtils.closeQuietly(fos);
+		        IOUtils.closeQuietly(fis);
+		        if(null!=tempFile && tempFile.exists()){
+		        tempFile.delete();
+		        }
+		      // log.debug("extractEntry: deleted temporary file at [{}]", tempFile.getPath());
+		      }
+	      return finalMap;
+	}
+	
+	
+	public  static List<Map<String, Object>> readCSVRows(InputStreamReader reader) {
+
+		List<Map<String, Object>> csvRowsList = new ArrayList<Map<String, Object>>();
+		ICsvMapReader mapReader = null;
+		try {
+			mapReader = new CsvMapReader(reader,
+					CsvPreference.STANDARD_PREFERENCE);
+
+			// the header columns are used as the keys to the Map
+			final String[] header = mapReader.getHeader(true);
+			//log.info("readCSVRows after processing cell");
+			Map<String, Object> rowMetaDataMap;
+			CellProcessor[] migrationProcessor = getMigrationProcessor(header.length);
+			while ((rowMetaDataMap = mapReader.read(header, migrationProcessor)) != null) {
+
+				csvRowsList.add(rowMetaDataMap);
+			}
+		} catch (Exception exception) {
+			//log.info("readCSVRows Exception occurred : "+ exception);
+		} finally {
+			if (mapReader != null) {
+				try {
+					mapReader.close();
+				} catch (IOException ioException) {
+					//log.info("readCSVRows Exception occurred : "+ ioException);
+				}
+			}
+		}
+		return csvRowsList;
+	}
+	
+	private static CellProcessor[] getMigrationProcessor(int colCount) {
+
+		final CellProcessor[] migrationProcessors = new CellProcessor[colCount];
+		for (int i = 0; i < migrationProcessors.length; i++) {
+			migrationProcessors[i] = null;
+		}
+		return migrationProcessors;
+	}
+	
+	
+	public static boolean isCSVFile(ZipInputStream zis){
+		 ZipEntry entry;
+		 boolean CSVFlag=false;
+	        try {
+				while (null != (entry = zis.getNextEntry())){
+					String csvFileName=Text.getName(entry.getName());
+					if(checkForCSVFile(csvFileName)){
+						CSVFlag=true;
+						break;
+					}
+				}
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+	        return CSVFlag;
+	}
+	
+	 public static  boolean checkForCSVFile(String fileName)
+	  {
+	      if (null!=fileName && fileName.length()>0 && fileName.contains(".csv")) {
+	        return true;
+	      }
+	    
+	    return false;
+	  }
+}
+-------------------------------Read CSV File Data end--------------------------------------------------------------
+
+-------------------------------Test read CSV file data --------------------------------------
+
+package com.arche11.UnarchivalFlow;
+
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.InputStream;
+import java.nio.charset.Charset;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.Map.Entry;
+import java.util.zip.ZipInputStream;
+
+public class TestReadCSV {
+	private static final String FILE_PATH="C:/Users/YE20004956/Desktop/UNARCHIVER_Process_Test/";
+	private static final String FILE_NAME="Adobe1.zip";
+	
+	public static void main(String[] args) {
+		ReadCSVFileData readCSV=new ReadCSVFileData();
+		File file;
+		InputStream inputStream=null;
+		file=new File(FILE_PATH+FILE_NAME);
+		try {
+			inputStream=new FileInputStream(file);
+		} catch (FileNotFoundException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}//open input stream
+		 ZipInputStream zis =new ZipInputStream(new BufferedInputStream(inputStream), Charset.forName("Cp437"));
+		 
+		 Map<List<MetadataCSVBean>,List<String>> outputFileNameLibMap=readCSV.readCSVData(zis);
+		 
+		 Set<Map.Entry<List<MetadataCSVBean>,List<String>>> entrySet = outputFileNameLibMap.entrySet();
+         
+         // Collection Iterator
+         Iterator<Entry<List<MetadataCSVBean>,List<String>>> iterator = entrySet.iterator();
+  
+         while(iterator.hasNext()) {
+  
+             Entry<List<MetadataCSVBean>,List<String>> entryList = iterator.next();
+  
+             System.out.println("\n MetadataCSVData : "  + entryList.getKey());
+             
+             for(MetadataCSVBean beanObj:entryList.getKey()){
+            	 System.out.println("file name :"+beanObj.getFile() +"and the Library name :"+beanObj.getLibrary());
+             }
+  
+             for(String errMsg : entryList.getValue()) {
+                 System.out.println("\t\t\t\t" + errMsg);
+             }
+         }
+         
+
+		//System.out.println("outputFileNameLibMap : "+outputFileNameLibMap);
+		
+		/*Map<String,String> libraryDamLocationMap=new HashMap<>();
+		
+		libraryDamLocationMap.put("ETF Multifactor & Active","/content/dam/Sharepoint/etf-multifactor-and-active");
+		libraryDamLocationMap.put("ETF Multifactor Index Returns","/content/dam/Sharepoint/etf-multifactor-index-returns");
+		libraryDamLocationMap.put("ETF RiskGenetix","/content/dam/Sharepoint/etf-riskgenetix");
+		libraryDamLocationMap.put("F Shares vs. Active Mutual Funds","/content/dam/Sharepoint/f-shares-vs-active-mutual-funds");
+		libraryDamLocationMap.put("I Shares vs. Passive ETFs","/content/dam/Sharepoint/i-shares-vs-passive-etfs");
+		libraryDamLocationMap.put("I Shares vs. Active Mutual Funds","/content/dam/Sharepoint/i-shares-vs-active-mutual-funds");
+		libraryDamLocationMap.put("Opportunity Playbooks","/content/dam/Sharepoint/opportunity-playbooks");
+		libraryDamLocationMap.put("Portfolio Characteristics","/content/dam/Sharepoint/portfolio-characteristics");
+	    libraryDamLocationMap.put("Hartford Funds Expense Sheet","/content/dam/Sharepoint/reports-notes");
+	    libraryDamLocationMap.put("Quarterly Active Share Report","/content/dam/Sharepoint/quarterly-active-share-report");
+	    libraryDamLocationMap.put("Morningstar Analyst Reports","/content/dam/Sharepoint/morningstar-analyst-reports");
+	    libraryDamLocationMap.put("Due Diligence Notes","/content/dam/Sharepoint/due-diligence-think-tank-notes");
+	    libraryDamLocationMap.put("Fund Summaries","/content/dam/Sharepoint/fund-summaries");
+	    libraryDamLocationMap.put("ETF Summaries","/content/dam/Sharepoint/etf-summaries");
+		libraryDamLocationMap.put("ICG Weekly Insights","/content/dam/Sharepoint/icg-weekly-insights");
+		
+		
+		for (Map. Entry<String, String> entry : outputFileNameLibMap. entrySet()) {
+			     System.out.println("For file name :"+entry.getKey() + " libraryName is : "+entry.getValue() +" and the DAM Location is : "+libraryDamLocationMap.get(entry.getValue()));
+			}*/
+	}
+
+}
+
+----------------------------------------------------------------------------------------------------------------------
+
+-----------------------------------TEST FILE NAME ----------------------
+
+package com.arche11.UnarchivalFlow;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.jackrabbit.util.Text;
+
+import com.adobe.granite.maintenance.MaintenanceConstants;
+
+public class TestFileName {
+
+	
+	public static void main(String[] args) {
+		
+		String assetPath="/content/dam/unarchival_test/Adobe1.zip";
+		
+		System.out.println(Text.getRelativeParent(assetPath, 1));
+		
+		String rootHint = Text.getRelativeParent(assetPath, 1) + "/" + StringUtils.substringBeforeLast("Adobe1.zip", ".");
+		
+		System.out.println(rootHint);
+	}
+}
+
+--------------------------------------------------------------------------

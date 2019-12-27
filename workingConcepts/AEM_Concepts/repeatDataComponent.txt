@@ -1,0 +1,192 @@
+{
+jcr:primaryType: "cq:Component",
+jcr:createdBy: "admin",
+jcr:title: "repeatDataComponent",
+jcr:created: "Thu Aug 16 2018 13:04:55 GMT+0530",
+jcr:description: "This component is to repeat data as sections",
+componentGroup: "test",
+repeatDataMulti.html: {
+jcr:primaryType: "nt:file",
+jcr:createdBy: "admin",
+jcr:created: "Thu Aug 16 2018 13:04:55 GMT+0530",
+jcr:content: {
+jcr:primaryType: "nt:resource",
+jcr:lastModifiedBy: "Administrator",
+jcr:mimeType: "text/plain",
+jcr:lastModified: "Thu Aug 16 2018 15:02:07 GMT+0530",
+:jcr:data: 502,
+jcr:uuid: "be97490a-ba29-478e-a192-f59b8ff60686"
+}
+},
+cq:dialog: {
+jcr:primaryType: "nt:unstructured",
+sling:resourceType: "cq/gui/components/authoring/dialog",
+content: {
+jcr:primaryType: "nt:unstructured",
+sling:resourceType: "granite/ui/components/coral/foundation/fixedcolumns",
+items: {
+jcr:primaryType: "nt:unstructured",
+column: {
+jcr:primaryType: "nt:unstructured",
+sling:resourceType: "granite/ui/components/coral/foundation/container",
+items: {
+jcr:primaryType: "nt:unstructured",
+sportsInfoSection: {
+jcr:primaryType: "nt:unstructured",
+composite: true,
+fieldLabel: "Sports",
+eaem-show-on-collapse: "EAEM.showSportName",
+sling:resourceType: "granite/ui/components/coral/foundation/form/multifield",
+field: {
+jcr:primaryType: "nt:unstructured",
+name: "./sportsInfo",
+sling:resourceType: "granite/ui/components/coral/foundation/container",
+items: {
+jcr:primaryType: "nt:unstructured",
+column: {
+jcr:primaryType: "nt:unstructured",
+sling:resourceType: "granite/ui/components/coral/foundation/container",
+items: {
+jcr:primaryType: "nt:unstructured",
+sport: {
+jcr:primaryType: "nt:unstructured",
+name: "./sportName",
+fieldLabel: "Sport Name",
+sling:resourceType: "granite/ui/components/coral/foundation/form/textfield",
+fieldDescription: "Name of Sport"
+},
+path: {
+jcr:primaryType: "nt:unstructured",
+rootPath: "/content/dam",
+name: "./pathbr",
+fieldLabel: "Path",
+sling:resourceType: "granite/ui/components/coral/foundation/form/pathfield",
+fieldDescription: "Select Path"
+},
+type: {
+jcr:primaryType: "nt:unstructured",
+name: "./desc",
+fieldLabel: "Description",
+sling:resourceType: "granite/ui/components/coral/foundation/form/textarea",
+fieldDescription: "Description"
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+
+--------------------------------
+Sling Model
+package com.arche11.core;
+
+import javax.inject.Inject;
+
+import org.apache.sling.api.SlingHttpServletRequest;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.models.annotations.Model;
+import org.apache.sling.models.annotations.Optional;
+import org.apache.sling.models.annotations.Via;
+
+@Model(adaptables=SlingHttpServletRequest.class)
+public class SportInfoMultiFieldModel {
+
+	//If you use adaptables as SlingHttpRequest then 
+	//1.Injected resource should be annotated as Via("Resource")
+	//2.Use always public access modifier
+	
+	@Inject
+	@Optional
+	@Via("resource")
+	public Resource sportsInfo;
+}
+----------------------------------------
+HTML
+
+<style>
+  
+  
+h2 {
+    display: inline;
+}
+img{
+    float:left;
+}
+  
+  
+</style>
+
+<div data-sly-use.info="sportUse.js">
+    <h1>${info.info3}</h1>
+</div>
+
+<div data-sly-use.resPath="graniteResourcePath.js">
+    <h1>${resPath}</h1>
+</div>
+
+<h2>Current Sport</h2>
+
+<div data-sly-use.multiItems="com.arche11.core.SportInfoMultiFieldModel">
+
+    <div data-sly-list.head="${multiItems.sportsInfo.listChildren}">
+
+        <div style="height:250px;">
+
+            <img src=${head.pathbr} height=200 width=270 style="padding:4px"/>
+
+                <sly data-sly-use.incrMntVal="${'increment.js' @value1=headList.index}"
+
+                <h2>${head.sportName} + ${incrMntVal} </h2>
+
+                  <p>${head.desc}</p>
+
+            </div>
+         <hr>
+   </div>
+</div>
+
+--------------------------------
+sportUse.js
+
+"use strict";
+use(function () {
+
+    var info={};
+    info.info1 = "from use api1";
+    info.info2 = "from use api2";
+    info.info3 = "from use api3";
+    return info;
+});
+
+---------------------------
+graniteResourcePath.js
+
+"use strict";
+
+use(function(){
+
+var currentResourcePath=granite.resource.path;
+
+    return currentResourcePath;
+    
+});
+
+---------------------------
+increment.js
+
+"use strict";
+use(function()
+{
+var listSize_incrementByOne=this.value1+1;
+
+    return listSize_incrementByOne;
+    
+});
+
+---------------------------

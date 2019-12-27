@@ -1,0 +1,150 @@
+package com.arche11.core.workflow;
+
+import java.io.IOException;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.lang3.StringUtils;
+import org.apache.sling.api.resource.LoginException;
+import org.apache.sling.api.resource.Resource;
+import org.apache.sling.api.resource.ResourceResolver;
+import org.apache.sling.api.resource.ResourceResolverFactory;
+import org.osgi.framework.Constants;
+import org.osgi.service.component.annotations.Component;
+import org.osgi.service.component.annotations.Reference;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.adobe.granite.workflow.WorkflowException;
+import com.adobe.granite.workflow.WorkflowSession;
+import com.adobe.granite.workflow.exec.WorkItem;
+import com.adobe.granite.workflow.exec.WorkflowProcess;
+import com.adobe.granite.workflow.metadata.MetaDataMap;
+import com.day.cq.dam.api.Asset;
+import com.day.cq.dam.api.Rendition;
+import com.day.cq.dam.api.handler.AssetHandler;
+import com.day.cq.dam.api.renditions.RenditionMaker;
+import com.day.cq.dam.api.renditions.RenditionTemplate;
+import com.day.cq.dam.api.thumbnail.ThumbnailConfig;
+
+@Component(service=WorkflowProcess.class,property={"process.label=MyCustomRenditionWorkflowProcess",
+	Constants.SERVICE_DESCRIPTION+"=This is my custom Rendition workflow impl"})
+public class MyCustomRenditionWorkflowProcess implements WorkflowProcess {
+
+	private Logger log=LoggerFactory.getLogger(MyCustomRenditionWorkflowProcess.class);
+	private static final String processArgs = "PROCESS_ARGS";
+
+    @Reference
+    ResourceResolverFactory rrf;
+    
+    @Reference
+    AssetHandler assetHandler;
+    
+    @Reference
+    RenditionMaker renditionMaker;
+    
+    ResourceResolver rr;
+    
+	@Override
+	public void execute(WorkItem workItem, WorkflowSession workflowSession, MetaDataMap metadataMap)
+			throws WorkflowException {
+		
+		log.info("*****through launcher started Workflow.."
+				+ "Inside workflow execute method*****");
+		
+		String processArgument = StringUtils.EMPTY;
+		String argumentValue = null;
+		String payload=null;
+
+		if (metadataMap.containsKey(processArgs)) {
+			processArgument = metadataMap.get(processArgs, "defaultValue");
+		}
+
+		if (!StringUtils.isBlank(processArgument)) {
+			argumentValue = processArgument;
+			
+			log.info("The argument value is :"+argumentValue);
+		}
+		
+		
+		//----------------------------Take resource resolver
+		Map<String,Object> param=new HashMap<String,Object>();
+		param.put(ResourceResolverFactory.SUBSERVICE,"myWorkflowInvokeService");
+		
+		try {
+			rr=rrf.getServiceResourceResolver(param);
+			
+			payload=workItem.getWorkflowData().getPayload().toString();
+			
+			log.info("Payload path is :"+payload);
+			
+			if(payload.contains("/jcr:content/renditions/original")){
+				payload=payload.replace("/jcr:content/renditions/original", "");
+			}
+			Resource damResource=rr.resolve(payload);
+			
+			if(damResource!=null){
+				
+				log.info("Inside damResource is not null and resource name :"+damResource.getName());
+				
+				Asset damAsset=damResource.adaptTo(Asset.class);
+				
+				    if(damAsset!=null){
+				    	log.info("Inside damAsset is not null");
+				    	
+				    	log.info("Asset exists ...hence creating renditions for asset :"+damAsset.getName());
+				    	
+				    	/* create renditionTemplate with required fields 
+				    	 * width,
+				    	 * height,
+				    	 * quality,
+				    	 * mimeType 
+				    	 * */
+				    	
+				    	int width=250;
+				    	int height=250;
+				    	int quality=100;
+				    	String mimeType="image/jpeg";
+				    	String[] mimeTypesToKeep ={ "image/jpeg","image/png"};
+				    	
+				    	//Below template will generate WEB renditions cq5dam.web.250.250.jpeg
+				    	RenditionTemplate webRenditionTemplate=
+				    			renditionMaker.createWebRenditionTemplate(damAsset, width, height, quality, mimeType, mimeTypesToKeep);
+				    	
+				    	//below template will generate thumbnails cq5dam.thumbnail.250.250.jpeg
+				    	RenditionTemplate thumbnailRenditionTemplate=
+				    			renditionMaker.createThumbnailTemplate(damAsset, width, height, true);
+				    	// Using the rendition template created above , generate the renditions
+				    	
+				    	List<Rendition> webRenditionsList=renditionMaker.generateRenditions(damAsset, webRenditionTemplate);
+				    	
+				    	//List<Rendition> thumbnailRenditionsList=renditionMaker.generateRenditions(damAsset, thumbnailRenditionTemplate);
+				    	
+				    	
+				    	Collection<ThumbnailConfig> configs = null;
+				    	for(Rendition rendition:webRenditionsList){
+				    		assetHandler.createThumbnails(damAsset, rendition,configs);
+				    	}
+				 
+				    	
+				    	//to test whether renditons created or not
+				    	int i=0;
+				    	for(Rendition renditionCheck:webRenditionsList){
+				    		i++;
+				    	log.info("generated rendition"+i+" : : "+renditionCheck.getName()+"and rendition Path is :"+renditionCheck.getPath() );
+				    	}
+				    	
+				    	rr.commit();
+				    	
+				    }
+			}
+			
+		} catch (LoginException | IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+
+}

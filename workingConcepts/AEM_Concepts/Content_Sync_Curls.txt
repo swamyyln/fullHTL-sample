@@ -1,0 +1,35 @@
+
+Need to disable launchers from Workflow console using CURL commands
+
+curl -u admin:admin -d "action=UPDATE&workflowTitle=myWorkflowTitle" http://localhost:4502/etc/workflow/instances/{id}
+
+----------------------------------------------------
+
+Content Sync from PROD to QA
+
+curl -u admin:authornew -X POST http://10.96.87.46:4502/crx/packmgr/service/.json/etc/packages/my_packages/Content-Prod-Author.zip?cmd=build
+
+curl -u admin:authornew http://10.96.87.46:4502/etc/packages/my_packages/Content-Prod-Author.zip >D:\Jenkins\workspace\ContentSyncQA\etc\packages\my_packages\Content-Prod-Author.zip
+
+curl -u admin:admin -F file=@"D:\Jenkins\workspace\ContentSyncQA\etc\packages\my_packages\Content-Prod-Author.zip" -F name="Content-Prod-Author" -F force=true -F install=true  http://10.96.87.21:4502/crx/packmgr/service.jsp
+
+---------------------------------------------------------
+Docs Sync from PROD to QA
+
+curl -u admin:authornew -X POST http://10.96.87.46:4502/crx/packmgr/service/.json/etc/packages/my_packages/Docs-Prod-Author.zip?cmd=build
+
+curl -u admin:authornew http://10.96.87.46:4502/etc/packages/my_packages/Docs-Prod-Author.zip >D:\Jenkins\workspace\ContentSyncQA\etc\packages\my_packages\Docs-Prod-Author.zip
+
+curl -u admin:admin -F file=@"D:\Jenkins\workspace\ContentSyncQA\etc\packages\my_packages\Docs-Prod-Author.zip" -F name="Docs-Prod-Author" -F force=true -F install=true  http://10.96.87.21:4502/crx/packmgr/service.jsp
+
+----------------------------------------------------------
+
+Images Sync from PROD to QA
+
+curl -u admin:authornew -X POST http://10.96.87.46:4502/crx/packmgr/service/.json/etc/packages/my_packages/Images-Prod-Author.zip?cmd=build
+
+curl -u admin:authornew http://10.96.87.46:4502/etc/packages/my_packages/Images-Prod-Author.zip >D:\Jenkins\workspace\ContentSyncQA\etc\packages\my_packages\Images-Prod-Author.zip
+
+curl -u admin:admin -F file=@"D:\Jenkins\workspace\ContentSyncQA\etc\packages\my_packages\Images-Prod-Author.zip" -F name="Images-Prod-Author" -F force=true -F install=true  http://10.96.87.21:4502/crx/packmgr/service.jsp
+
+---------------------------------------------------------
