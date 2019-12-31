@@ -1,0 +1,10 @@
+JMX Bean for external user sync:
+
+New Bean:
+MBEAN_OBJECT_NAME("org.apache.jackrabbit.oak:type=UserManagement,host=%s,port=%s,type=Tools")
+
+New Method to sync User: 
+mbean.syncExternalUsers(syncUser);
+
+command syntax to sync only single external user through JMX UserManagement mbean: 
+syncExternalUsers(syncUser)-->["CN=23766,OU=publish,OU=people,DC=ADTHF,DC=com;custom_ldap"]
